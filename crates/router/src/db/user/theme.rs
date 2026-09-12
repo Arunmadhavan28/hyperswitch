@@ -1,5 +1,5 @@
-use common_utils::types::theme::ThemeLineage;
-use diesel_models::user::theme as storage;
+use common_utils::types::user::ThemeLineage;
+use diesel_models::user::theme::{self as storage, ThemeUpdate};
 use error_stack::report;
 
 use super::MockDb;
@@ -31,11 +31,21 @@ pub trait ThemeInterface {
         lineage: ThemeLineage,
     ) -> CustomResult<storage::Theme, errors::StorageError>;
 
-    async fn delete_theme_by_lineage_and_theme_id(
+    async fn update_theme_by_theme_id(
         &self,
         theme_id: String,
-        lineage: ThemeLineage,
+        theme_update: ThemeUpdate,
     ) -> CustomResult<storage::Theme, errors::StorageError>;
+
+    async fn delete_theme_by_theme_id(
+        &self,
+        theme_id: String,
+    ) -> CustomResult<storage::Theme, errors::StorageError>;
+
+    async fn list_themes_at_and_under_lineage(
+        &self,
+        lineage: ThemeLineage,
+    ) -> CustomResult<Vec<storage::Theme>, errors::StorageError>;
 }
 
 #[async_trait::async_trait]
@@ -81,13 +91,32 @@ impl ThemeInterface for Store {
             .map_err(|error| report!(errors::StorageError::from(error)))
     }
 
-    async fn delete_theme_by_lineage_and_theme_id(
+    async fn update_theme_by_theme_id(
         &self,
         theme_id: String,
-        lineage: ThemeLineage,
+        theme_update: ThemeUpdate,
     ) -> CustomResult<storage::Theme, errors::StorageError> {
         let conn = connection::pg_connection_write(self).await?;
-        storage::Theme::delete_by_theme_id_and_lineage(&conn, theme_id, lineage)
+        storage::Theme::update_by_theme_id(&conn, theme_id, theme_update)
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+    }
+
+    async fn delete_theme_by_theme_id(
+        &self,
+        theme_id: String,
+    ) -> CustomResult<storage::Theme, errors::StorageError> {
+        let conn = connection::pg_connection_write(self).await?;
+        storage::Theme::delete_by_theme_id(&conn, theme_id)
+            .await
+            .map_err(|error| report!(errors::StorageError::from(error)))
+    }
+    async fn list_themes_at_and_under_lineage(
+        &self,
+        lineage: ThemeLineage,
+    ) -> CustomResult<Vec<storage::Theme>, errors::StorageError> {
+        let conn = connection::pg_connection_read(self).await?;
+        storage::Theme::find_all_by_lineage_hierarchy(&conn, lineage)
             .await
             .map_err(|error| report!(errors::StorageError::from(error)))
     }
@@ -125,6 +154,57 @@ fn check_theme_with_lineage(theme: &storage::Theme, lineage: &ThemeLineage) -> b
                     .as_ref()
                     .is_some_and(|merchant_id_inner| merchant_id_inner == merchant_id)
                 && theme.profile_id.is_none()
+        }
+        ThemeLineage::Profile {
+            tenant_id,
+            org_id,
+            merchant_id,
+            profile_id,
+        } => {
+            &theme.tenant_id == tenant_id
+                && theme
+                    .org_id
+                    .as_ref()
+                    .is_some_and(|org_id_inner| org_id_inner == org_id)
+                && theme
+                    .merchant_id
+                    .as_ref()
+                    .is_some_and(|merchant_id_inner| merchant_id_inner == merchant_id)
+                && theme
+                    .profile_id
+                    .as_ref()
+                    .is_some_and(|profile_id_inner| profile_id_inner == profile_id)
+        }
+    }
+}
+
+fn check_theme_belongs_to_lineage_hierarchy(
+    theme: &storage::Theme,
+    lineage: &ThemeLineage,
+) -> bool {
+    match lineage {
+        ThemeLineage::Tenant { tenant_id } => &theme.tenant_id == tenant_id,
+        ThemeLineage::Organization { tenant_id, org_id } => {
+            &theme.tenant_id == tenant_id
+                && theme
+                    .org_id
+                    .as_ref()
+                    .is_some_and(|org_id_inner| org_id_inner == org_id)
+        }
+        ThemeLineage::Merchant {
+            tenant_id,
+            org_id,
+            merchant_id,
+        } => {
+            &theme.tenant_id == tenant_id
+                && theme
+                    .org_id
+                    .as_ref()
+                    .is_some_and(|org_id_inner| org_id_inner == org_id)
+                && theme
+                    .merchant_id
+                    .as_ref()
+                    .is_some_and(|merchant_id_inner| merchant_id_inner == merchant_id)
         }
         ThemeLineage::Profile {
             tenant_id,
@@ -193,6 +273,7 @@ impl ThemeInterface for MockDb {
             email_background_color: new_theme.email_background_color,
             email_entity_name: new_theme.email_entity_name,
             email_entity_logo_url: new_theme.email_entity_logo_url,
+            theme_config_version: new_theme.theme_config_version,
         };
         themes.push(theme.clone());
 
@@ -209,11 +290,8 @@ impl ThemeInterface for MockDb {
             .find(|theme| theme.theme_id == theme_id)
             .cloned()
             .ok_or(
-                errors::StorageError::ValueNotFound(format!(
-                    "Theme with id {} not found",
-                    theme_id
-                ))
-                .into(),
+                errors::StorageError::ValueNotFound(format!("Theme with id {theme_id} not found"))
+                    .into(),
             )
     }
 
@@ -249,31 +327,72 @@ impl ThemeInterface for MockDb {
             .cloned()
             .ok_or(
                 errors::StorageError::ValueNotFound(format!(
-                    "Theme with lineage {:?} not found",
-                    lineage
+                    "Theme with lineage {lineage:?} not found",
                 ))
                 .into(),
             )
     }
 
-    async fn delete_theme_by_lineage_and_theme_id(
+    async fn update_theme_by_theme_id(
         &self,
         theme_id: String,
-        lineage: ThemeLineage,
+        theme_update: ThemeUpdate,
+    ) -> CustomResult<storage::Theme, errors::StorageError> {
+        let mut themes = self.themes.lock().await;
+        themes
+            .iter_mut()
+            .find(|theme| theme.theme_id == theme_id)
+            .map(|theme| {
+                let now = common_utils::date_time::now();
+                let theme_config_version = now.assume_utc().unix_timestamp().to_string();
+                match theme_update {
+                    ThemeUpdate::EmailConfig { email_config } => {
+                        theme.email_primary_color = email_config.primary_color;
+                        theme.email_foreground_color = email_config.foreground_color;
+                        theme.email_background_color = email_config.background_color;
+                        theme.email_entity_name = email_config.entity_name;
+                        theme.email_entity_logo_url = email_config.entity_logo_url;
+                    }
+                    ThemeUpdate::ThemeConfig => {
+                        theme.theme_config_version = theme_config_version;
+                    }
+                }
+                theme.last_modified_at = now;
+                theme.clone()
+            })
+            .ok_or_else(|| {
+                report!(errors::StorageError::ValueNotFound(format!(
+                    "Theme with id {theme_id} not found",
+                )))
+            })
+    }
+
+    async fn delete_theme_by_theme_id(
+        &self,
+        theme_id: String,
     ) -> CustomResult<storage::Theme, errors::StorageError> {
         let mut themes = self.themes.lock().await;
         let index = themes
             .iter()
-            .position(|theme| {
-                theme.theme_id == theme_id && check_theme_with_lineage(theme, &lineage)
-            })
+            .position(|theme| theme.theme_id == theme_id)
             .ok_or(errors::StorageError::ValueNotFound(format!(
-                "Theme with id {} and lineage {:?} not found",
-                theme_id, lineage
+                "Theme with id {theme_id} not found"
             )))?;
 
         let theme = themes.remove(index);
-
         Ok(theme)
+    }
+    async fn list_themes_at_and_under_lineage(
+        &self,
+        lineage: ThemeLineage,
+    ) -> CustomResult<Vec<storage::Theme>, errors::StorageError> {
+        let themes = self.themes.lock().await;
+        let matching_themes: Vec<storage::Theme> = themes
+            .iter()
+            .filter(|theme| check_theme_belongs_to_lineage_hierarchy(theme, &lineage))
+            .cloned()
+            .collect();
+
+        Ok(matching_themes)
     }
 }

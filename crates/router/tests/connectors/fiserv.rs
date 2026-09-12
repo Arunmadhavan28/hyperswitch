@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use router::types::{self, domain, storage::enums};
 use serde_json::json;
 
@@ -50,10 +50,15 @@ fn payment_method_details() -> Option<types::PaymentsAuthorizeData> {
             card_issuer: None,
             card_network: None,
             card_type: None,
+            card_subtype: None,
+            card_segment_type: None,
+            funding_source: None,
             card_issuing_country: None,
+            card_issuing_country_code: None,
             bank_code: None,
             nick_name: Some(Secret::new("nick_name".into())),
             card_holder_name: Some(Secret::new("card holder name".into())),
+            co_badged_card_data: None,
         }),
         capture_method: Some(diesel_models::enums::CaptureMethod::Manual),
         ..utils::PaymentAuthorizeType::default().0

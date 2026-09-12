@@ -48,8 +48,6 @@ impl CashtocodeTest {
             currency: enums::Currency::EUR,
             payment_method_data,
             confirm: true,
-            statement_descriptor_suffix: None,
-            statement_descriptor: None,
             setup_future_usage: None,
             mandate_id: None,
             off_session: None,
@@ -68,12 +66,13 @@ impl CashtocodeTest {
             router_return_url: Some(String::from("https://google.com")),
             webhook_url: None,
             complete_authorize_url: None,
-            customer_id: if let Ok(id) = cust_id { Some(id) } else { None },
+            customer_id: cust_id.ok(),
             surcharge_details: None,
             request_incremental_authorization: false,
             metadata: None,
             authentication_data: None,
             customer_acceptance: None,
+            billing_descriptor: None,
             ..utils::PaymentAuthorizeType::default().0
         })
     }

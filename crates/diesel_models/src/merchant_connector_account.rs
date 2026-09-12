@@ -11,7 +11,7 @@ use crate::enums as storage_enums;
 #[cfg(feature = "v1")]
 use crate::schema::merchant_connector_account;
 #[cfg(feature = "v2")]
-use crate::{enums, schema_v2::merchant_connector_account, types};
+use crate::schema_v2::merchant_connector_account;
 
 #[cfg(feature = "v1")]
 #[derive(
@@ -54,6 +54,8 @@ pub struct MerchantConnectorAccount {
     pub additional_merchant_data: Option<Encryption>,
     pub connector_wallets_details: Option<Encryption>,
     pub version: common_enums::ApiVersion,
+    pub id: Option<id_type::MerchantConnectorAccountId>,
+    pub connector_webhook_registration_details: Option<serde_json::Value>,
 }
 
 #[cfg(feature = "v1")]
@@ -62,6 +64,9 @@ impl MerchantConnectorAccount {
         self.merchant_connector_id.clone()
     }
 }
+
+#[cfg(feature = "v2")]
+use crate::RequiredFromNullable;
 
 #[cfg(feature = "v2")]
 #[derive(
@@ -90,6 +95,7 @@ pub struct MerchantConnectorAccount {
     pub connector_webhook_details: Option<pii::SecretSerdeValue>,
     #[diesel(deserialize_as = super::OptionalDieselArray<pii::SecretSerdeValue>)]
     pub frm_config: Option<Vec<pii::SecretSerdeValue>>,
+    #[diesel(deserialize_as = RequiredFromNullable<id_type::ProfileId>)]
     pub profile_id: id_type::ProfileId,
     #[diesel(deserialize_as = super::OptionalDieselArray<String>)]
     pub applepay_verified_domains: Option<Vec<String>>,
@@ -98,8 +104,10 @@ pub struct MerchantConnectorAccount {
     pub additional_merchant_data: Option<Encryption>,
     pub connector_wallets_details: Option<Encryption>,
     pub version: common_enums::ApiVersion,
-    pub feature_metadata: Option<MerchantConnectorAccountFeatureMetadata>,
     pub id: id_type::MerchantConnectorAccountId,
+    #[serde(default)]
+    pub connector_webhook_registration_details: Option<serde_json::Value>,
+    pub feature_metadata: Option<MerchantConnectorAccountFeatureMetadata>,
 }
 
 #[cfg(feature = "v2")]
@@ -140,6 +148,7 @@ pub struct MerchantConnectorAccountNew {
     pub additional_merchant_data: Option<Encryption>,
     pub connector_wallets_details: Option<Encryption>,
     pub version: common_enums::ApiVersion,
+    pub id: Option<id_type::MerchantConnectorAccountId>,
 }
 
 #[cfg(feature = "v2")]
@@ -167,8 +176,8 @@ pub struct MerchantConnectorAccountNew {
     pub status: storage_enums::ConnectorStatus,
     pub additional_merchant_data: Option<Encryption>,
     pub connector_wallets_details: Option<Encryption>,
-    pub id: id_type::MerchantConnectorAccountId,
     pub version: common_enums::ApiVersion,
+    pub id: id_type::MerchantConnectorAccountId,
     pub feature_metadata: Option<MerchantConnectorAccountFeatureMetadata>,
 }
 
@@ -196,6 +205,7 @@ pub struct MerchantConnectorAccountUpdateInternal {
     pub status: Option<storage_enums::ConnectorStatus>,
     pub connector_wallets_details: Option<Encryption>,
     pub additional_merchant_data: Option<Encryption>,
+    pub connector_webhook_registration_details: Option<serde_json::Value>,
 }
 
 #[cfg(feature = "v2")]
@@ -291,6 +301,8 @@ pub struct RevenueRecoveryMetadata {
     pub max_retry_count: u16,
     /// Maximum number of `billing connector` retries before revenue recovery can start executing retries.
     pub billing_connector_retry_threshold: u16,
+    #[serde(default)]
+    pub max_hybrid_cascading_retry_count: u16,
     /// Billing account reference id is payment gateway id at billing connector end.
     /// Merchants need to provide a mapping between these merchant connector account and the corresponding  
     /// account reference IDs for each `billing connector`.

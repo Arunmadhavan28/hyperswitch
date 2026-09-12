@@ -11,7 +11,7 @@ use hyperswitch_domain_models::{
     types,
 };
 use hyperswitch_interfaces::errors;
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
 use time::PrimitiveDateTime;
 use url::Url;
@@ -65,7 +65,9 @@ impl TryFrom<&ItaubankRouterData<&types::PaymentsAuthorizeRouterData>> for Itaub
         match item.router_data.request.payment_method_data.clone() {
             PaymentMethodData::BankTransfer(bank_transfer_data) => {
                 match *bank_transfer_data {
-                    BankTransferData::Pix { pix_key, cpf, cnpj } => {
+                    BankTransferData::Pix {
+                        pix_key, cpf, cnpj, ..
+                    } => {
                         let nome = item.router_data.get_optional_billing_full_name();
                         // cpf and cnpj are mutually exclusive
                         let devedor = match (cnpj, cpf) {
@@ -80,7 +82,8 @@ impl TryFrom<&ItaubankRouterData<&types::PaymentsAuthorizeRouterData>> for Itaub
                                 nome,
                             },
                             _ => Err(errors::ConnectorError::MissingRequiredField {
-                                field_name: "cpf and cnpj both missing in payment_method_data",
+                                field_name: "cpf and cnpj both missing in payment_method_data"
+                                    .into(),
                             })?,
                         };
                         Ok(Self {
@@ -88,7 +91,7 @@ impl TryFrom<&ItaubankRouterData<&types::PaymentsAuthorizeRouterData>> for Itaub
                                 original: item.amount.to_owned(),
                             },
                             chave: pix_key.ok_or(errors::ConnectorError::MissingRequiredField {
-                                field_name: "pix_key",
+                                field_name: "pix_key".into(),
                             })?,
                             devedor,
                         })
@@ -105,6 +108,14 @@ impl TryFrom<&ItaubankRouterData<&types::PaymentsAuthorizeRouterData>> for Itaub
                     | BankTransferData::DanamonVaBankTransfer {}
                     | BankTransferData::MandiriVaBankTransfer {}
                     | BankTransferData::Pse {}
+                    | BankTransferData::InstantBankTransfer {}
+                    | BankTransferData::InstantBankTransferFinland {}
+                    | BankTransferData::InstantBankTransferPoland {}
+                    | BankTransferData::IndonesianBankTransfer { .. }
+                    | BankTransferData::PixAutomaticoPush { .. }
+                    | BankTransferData::PixAutomaticoQr {}
+                    | BankTransferData::PixEmv {}
+                    | BankTransferData::PixQr {}
                     | BankTransferData::LocalBankTransfer { .. } => {
                         Err(errors::ConnectorError::NotImplemented(
                             "Selected payment method through itaubank".to_string(),
@@ -130,7 +141,12 @@ impl TryFrom<&ItaubankRouterData<&types::PaymentsAuthorizeRouterData>> for Itaub
             | PaymentMethodData::CardToken(_)
             | PaymentMethodData::OpenBanking(_)
             | PaymentMethodData::NetworkToken(_)
-            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
+            | PaymentMethodData::CardDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::CardWithOptionalCVC(_)
+            | PaymentMethodData::CardWithNetworkTokenDetails(_)
+            | PaymentMethodData::CardWithLimitedDetails(_)
+            | PaymentMethodData::DecryptedWalletTokenDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::NetworkTokenDetailsForNetworkTransactionId(_) => {
                 Err(errors::ConnectorError::NotImplemented(
                     "Selected payment method through itaubank".to_string(),
                 )
@@ -285,9 +301,12 @@ impl<F, T> TryFrom<ResponseRouterData<F, ItaubankPaymentsResponse, T, PaymentsRe
                 mandate_reference: Box::new(None),
                 connector_metadata,
                 network_txn_id: None,
+                network_txn_link_id: None,
                 connector_response_reference_id: Some(item.response.txid),
                 incremental_authorization_allowed: None,
+                authentication_data: None,
                 charges: None,
+                payment_account_reference: None,
             }),
             ..item.data
         })
@@ -348,7 +367,7 @@ impl<F, T> TryFrom<ResponseRouterData<F, ItaubankPaymentsSyncResponse, T, Paymen
             .pix
             .first()
             .ok_or(errors::ConnectorError::MissingRequiredField {
-                field_name: "pix_id",
+                field_name: "pix_id".into(),
             })?
             .to_owned();
 
@@ -364,9 +383,12 @@ impl<F, T> TryFrom<ResponseRouterData<F, ItaubankPaymentsSyncResponse, T, Paymen
                 mandate_reference: Box::new(None),
                 connector_metadata,
                 network_txn_id: None,
+                network_txn_link_id: None,
                 connector_response_reference_id: Some(item.response.txid),
                 incremental_authorization_allowed: None,
+                authentication_data: None,
                 charges: None,
+                payment_account_reference: None,
             }),
             ..item.data
         })

@@ -17,7 +17,7 @@ use hyperswitch_interfaces::{
     consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     errors,
 };
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -179,6 +179,23 @@ pub struct MandateDetails {
 #[derive(Serialize, Clone, Debug)]
 pub struct ThreedsInfo {
     cardholder: CardHolder,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "threeDSRequestor")]
+    three_ds_requestor: Option<ThreeDSRequestor>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ThreeDSRequestor {
+    #[serde(rename = "threeDSRequestorChallengeInd")]
+    three_ds_requestor_challenge_ind: ThreeDSRequestorChallengeIndicator,
+}
+
+// EMVCo 3DS `threeDSRequestorChallengeInd` codes (only the values we send).
+#[derive(Serialize, Clone, Debug)]
+pub enum ThreeDSRequestorChallengeIndicator {
+    #[serde(rename = "01")]
+    NoPreference,
+    #[serde(rename = "04")]
+    ChallengeRequestedMandate,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -263,6 +280,12 @@ pub struct DataPaymentCaptureRequest {
     pub refno: String,
 }
 
+// Datatrans cancel expects an empty JSON object `{}` as the body when
+// Content-Type is application/json. Sending anything else (e.g. a bare JSON
+// string) triggers `INVALID_JSON_PAYLOAD`.
+#[derive(Debug, Serialize, Clone)]
+pub struct DatatransCancelRequest {}
+
 impl<T> TryFrom<(MinorUnit, T)> for DatatransRouterData<T> {
     type Error = error_stack::Report<errors::ConnectorError>;
     fn try_from((amount, item): (MinorUnit, T)) -> Result<Self, Self::Error> {
@@ -291,6 +314,7 @@ impl TryFrom<&types::SetupMandateRouterData> for DatatransPaymentsRequest {
                             cardholder_name: item.get_billing_full_name()?,
                             email: item.get_billing_email()?,
                         },
+                        three_ds_requestor: None,
                     })),
                 }),
                 refno: item.connector_request_reference_id.clone(),
@@ -319,7 +343,12 @@ impl TryFrom<&types::SetupMandateRouterData> for DatatransPaymentsRequest {
             | PaymentMethodData::OpenBanking(_)
             | PaymentMethodData::CardToken(_)
             | PaymentMethodData::NetworkToken(_)
-            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
+            | PaymentMethodData::CardDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::CardWithOptionalCVC(_)
+            | PaymentMethodData::CardWithNetworkTokenDetails(_)
+            | PaymentMethodData::CardWithLimitedDetails(_)
+            | PaymentMethodData::DecryptedWalletTokenDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::NetworkTokenDetailsForNetworkTransactionId(_) => {
                 Err(errors::ConnectorError::NotImplemented(
                     get_unimplemented_payment_method_error_message("Datatrans"),
                 ))?
@@ -370,7 +399,7 @@ impl TryFrom<&DatatransRouterData<&types::PaymentsAuthorizeRouterData>>
                     .additional_payment_method_data
                     .clone()
                     .ok_or(errors::ConnectorError::MissingRequiredField {
-                        field_name: "additional_payment_method_data",
+                        field_name: "additional_payment_method_data".into(),
                     })? {
                     AdditionalPaymentData::Card(card) => *card,
                     _ => Err(errors::ConnectorError::NotSupported {
@@ -404,7 +433,12 @@ impl TryFrom<&DatatransRouterData<&types::PaymentsAuthorizeRouterData>>
             | PaymentMethodData::OpenBanking(_)
             | PaymentMethodData::CardToken(_)
             | PaymentMethodData::NetworkToken(_)
-            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
+            | PaymentMethodData::CardDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::CardWithOptionalCVC(_)
+            | PaymentMethodData::CardWithNetworkTokenDetails(_)
+            | PaymentMethodData::CardWithLimitedDetails(_)
+            | PaymentMethodData::DecryptedWalletTokenDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::NetworkTokenDetailsForNetworkTransactionId(_) => {
                 Err(errors::ConnectorError::NotImplemented(
                     get_unimplemented_payment_method_error_message("Datatrans"),
                 ))?
@@ -458,7 +492,7 @@ fn create_card_details(
                 .threeds_server_transaction_id
                 .clone()
                 .map(Secret::new),
-            cavv: Secret::new(auth_data.cavv.clone()),
+            cavv: auth_data.cavv.clone(),
             eci: auth_data.eci.clone(),
             xid: auth_data.ds_trans_id.clone().map(Secret::new),
             three_ds_version: auth_data
@@ -468,11 +502,24 @@ fn create_card_details(
             authentication_response: "Y".to_string(),
         }));
     } else if item.router_data.is_three_ds() {
+        // Always run 3DS when the decision calls for it. The challenge indicator, not whether
+        // we ask for 3DS at all, is what encodes "force a challenge" (e.g. a new card) vs
+        // "no preference" (e.g. a previously used card, letting Datatrans/the issuer decide
+        // frictionless vs challenge).
+        let three_ds_requestor_challenge_ind =
+            if item.router_data.request.force_3ds_challenge == Some(true) {
+                None
+            } else {
+                Some(ThreeDSRequestorChallengeIndicator::NoPreference)
+            };
         details.three_ds = Some(ThreeDSecureData::Cardholder(ThreedsInfo {
             cardholder: CardHolder {
                 cardholder_name: item.router_data.get_billing_full_name()?,
                 email: item.router_data.get_billing_email()?,
             },
+            three_ds_requestor: three_ds_requestor_challenge_ind.map(|val| ThreeDSRequestor {
+                three_ds_requestor_challenge_ind: val,
+            }),
         }));
     }
     Ok(DataTransPaymentDetails::Cards(details))
@@ -488,7 +535,7 @@ fn create_mandate_details(
         alias,
         expiry_month: additional_card_details.card_exp_month.clone().ok_or(
             errors::ConnectorError::MissingRequiredField {
-                field_name: "card_exp_month",
+                field_name: "card_exp_month".into(),
             },
         )?,
         expiry_year: additional_card_details.get_card_expiry_year_2_digit()?,
@@ -559,9 +606,12 @@ impl<F>
                 reason: Some(error.message.clone()),
                 attempt_status: None,
                 connector_transaction_id: None,
+                connector_response_reference_id: None,
                 status_code: item.http_code,
-                issuer_error_code: None,
-                issuer_error_message: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             }),
             DatatransResponse::TransactionResponse(response) => {
                 Ok(PaymentsResponseData::TransactionResponse {
@@ -572,15 +622,18 @@ impl<F>
                     mandate_reference: Box::new(None),
                     connector_metadata: None,
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 })
             }
             DatatransResponse::ThreeDSResponse(response) => {
                 let redirection_link = match item.data.test_mode {
-                    Some(true) => format!("{}/v1/start", REDIRECTION_SBX_URL),
-                    Some(false) | None => format!("{}/v1/start", REDIRECTION_PROD_URL),
+                    Some(true) => format!("{REDIRECTION_SBX_URL}/v1/start"),
+                    Some(false) | None => format!("{REDIRECTION_PROD_URL}/v1/start"),
                 };
                 Ok(PaymentsResponseData::TransactionResponse {
                     resource_id: ResponseId::ConnectorTransactionId(
@@ -594,9 +647,12 @@ impl<F>
                     mandate_reference: Box::new(None),
                     connector_metadata: None,
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 })
             }
         };
@@ -630,9 +686,12 @@ impl<F>
                 reason: Some(error.message.clone()),
                 attempt_status: None,
                 connector_transaction_id: None,
+                connector_response_reference_id: None,
                 status_code: item.http_code,
-                issuer_error_code: None,
-                issuer_error_message: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             }),
             DatatransResponse::TransactionResponse(response) => {
                 Ok(PaymentsResponseData::TransactionResponse {
@@ -643,15 +702,18 @@ impl<F>
                     mandate_reference: Box::new(None),
                     connector_metadata: None,
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 })
             }
             DatatransResponse::ThreeDSResponse(response) => {
                 let redirection_link = match item.data.test_mode {
-                    Some(true) => format!("{}/v1/start", REDIRECTION_SBX_URL),
-                    Some(false) | None => format!("{}/v1/start", REDIRECTION_PROD_URL),
+                    Some(true) => format!("{REDIRECTION_SBX_URL}/v1/start"),
+                    Some(false) | None => format!("{REDIRECTION_PROD_URL}/v1/start"),
                 };
                 Ok(PaymentsResponseData::TransactionResponse {
                     resource_id: ResponseId::ConnectorTransactionId(
@@ -665,9 +727,12 @@ impl<F>
                     mandate_reference: Box::new(None),
                     connector_metadata: None,
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 })
             }
         };
@@ -707,9 +772,12 @@ impl TryFrom<RefundsResponseRouterData<Execute, DatatransRefundsResponse>>
                     reason: Some(error.message),
                     attempt_status: None,
                     connector_transaction_id: None,
+                    connector_response_reference_id: None,
                     status_code: item.http_code,
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -738,9 +806,12 @@ impl TryFrom<RefundsResponseRouterData<RSync, DatatransSyncResponse>>
                 reason: Some(error.message),
                 attempt_status: None,
                 connector_transaction_id: None,
+                connector_response_reference_id: None,
                 status_code: item.http_code,
-                issuer_error_code: None,
-                issuer_error_message: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             }),
             DatatransSyncResponse::Response(response) => Ok(RefundsResponseData {
                 connector_refund_id: response.transaction_id.to_string(),
@@ -769,9 +840,12 @@ impl TryFrom<PaymentsSyncResponseRouterData<DatatransSyncResponse>>
                     reason: Some(error.message),
                     attempt_status: None,
                     connector_transaction_id: None,
+                    connector_response_reference_id: None,
                     status_code: item.http_code,
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 });
                 Ok(Self {
                     response,
@@ -795,8 +869,11 @@ impl TryFrom<PaymentsSyncResponseRouterData<DatatransSyncResponse>>
                         status_code: item.http_code,
                         attempt_status: None,
                         connector_transaction_id: None,
-                        issuer_error_code: None,
-                        issuer_error_message: None,
+                        connector_response_reference_id: None,
+                        network_advice_code: None,
+                        network_decline_code: None,
+                        network_error_message: None,
+                        connector_metadata: None,
                     })
                 } else {
                     let mandate_reference = sync_response
@@ -817,9 +894,12 @@ impl TryFrom<PaymentsSyncResponseRouterData<DatatransSyncResponse>>
                         mandate_reference: Box::new(mandate_reference),
                         connector_metadata: None,
                         network_txn_id: None,
+                        network_txn_link_id: None,
                         connector_response_reference_id: None,
                         incremental_authorization_allowed: None,
+                        authentication_data: None,
                         charges: None,
+                        payment_account_reference: None,
                     })
                 };
                 Ok(Self {

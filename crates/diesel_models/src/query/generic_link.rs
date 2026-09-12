@@ -10,11 +10,14 @@ use crate::{
         PaymentMethodCollectLink, PayoutLink, PayoutLinkUpdate,
     },
     schema::generic_link::dsl,
-    PgPooledConn, StorageResult,
+    DatabaseConnectionWithContext, StorageResult,
 };
 
 impl GenericLinkNew {
-    pub async fn insert(self, conn: &PgPooledConn) -> StorageResult<GenericLinkState> {
+    pub async fn insert(
+        self,
+        conn: &DatabaseConnectionWithContext<'_>,
+    ) -> StorageResult<GenericLinkState> {
         generics::generic_insert(conn, self)
             .await
             .and_then(|res: GenericLink| {
@@ -26,7 +29,7 @@ impl GenericLinkNew {
 
     pub async fn insert_pm_collect_link(
         self,
-        conn: &PgPooledConn,
+        conn: &DatabaseConnectionWithContext<'_>,
     ) -> StorageResult<PaymentMethodCollectLink> {
         generics::generic_insert(conn, self)
             .await
@@ -37,7 +40,10 @@ impl GenericLinkNew {
             })
     }
 
-    pub async fn insert_payout_link(self, conn: &PgPooledConn) -> StorageResult<PayoutLink> {
+    pub async fn insert_payout_link(
+        self,
+        conn: &DatabaseConnectionWithContext<'_>,
+    ) -> StorageResult<PayoutLink> {
         generics::generic_insert(conn, self)
             .await
             .and_then(|res: GenericLink| {
@@ -50,7 +56,7 @@ impl GenericLinkNew {
 
 impl GenericLink {
     pub async fn find_generic_link_by_link_id(
-        conn: &PgPooledConn,
+        conn: &DatabaseConnectionWithContext<'_>,
         link_id: &str,
     ) -> StorageResult<GenericLinkState> {
         generics::generic_find_one::<<Self as HasTable>::Table, _, _>(
@@ -66,7 +72,7 @@ impl GenericLink {
     }
 
     pub async fn find_pm_collect_link_by_link_id(
-        conn: &PgPooledConn,
+        conn: &DatabaseConnectionWithContext<'_>,
         link_id: &str,
     ) -> StorageResult<PaymentMethodCollectLink> {
         generics::generic_find_one::<<Self as HasTable>::Table, _, _>(
@@ -82,7 +88,7 @@ impl GenericLink {
     }
 
     pub async fn find_payout_link_by_link_id(
-        conn: &PgPooledConn,
+        conn: &DatabaseConnectionWithContext<'_>,
         link_id: &str,
     ) -> StorageResult<PayoutLink> {
         generics::generic_find_one::<<Self as HasTable>::Table, _, _>(
@@ -101,7 +107,7 @@ impl GenericLink {
 impl PayoutLink {
     pub async fn update_payout_link(
         self,
-        conn: &PgPooledConn,
+        conn: &DatabaseConnectionWithContext<'_>,
         payout_link_update: PayoutLinkUpdate,
     ) -> StorageResult<Self> {
         generics::generic_update_with_results::<<Self as HasTable>::Table, _, _, _>(
@@ -224,7 +230,11 @@ impl TryFrom<GenericLink> for PayoutLink {
 
         Ok(Self {
             link_id: db_val.link_id,
-            primary_reference: db_val.primary_reference,
+            primary_reference: common_utils::id_type::PayoutId::try_from(std::borrow::Cow::Owned(
+                db_val.primary_reference,
+            ))
+            .change_context(errors::ParsingError::UnknownError)
+            .attach_printable("Failed to parse PayoutId from primary_reference string")?,
             merchant_id: db_val.merchant_id,
             created_at: db_val.created_at,
             last_modified_at: db_val.last_modified_at,

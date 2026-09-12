@@ -4,7 +4,10 @@
 #[cfg(feature = "v1")]
 #[utoipa::path(
     post,
-    path = "/accounts/{account_id}/connectors",
+    path = "/account/{account_id}/connectors",
+    params(
+        ("account_id" = String, Path, description = "The unique identifier for the merchant account")
+    ),
     request_body(
         content = MerchantConnectorCreate,
         examples(
@@ -57,7 +60,7 @@
     ),
     tag = "Merchant Connector Account",
     operation_id = "Create a Merchant Connector",
-    security(("admin_api_key" = []))
+    security(("api_key" = []))
 )]
 pub async fn connector_create() {}
 
@@ -130,10 +133,10 @@ pub async fn connector_create() {}
 #[cfg(feature = "v1")]
 #[utoipa::path(
     get,
-    path = "/accounts/{account_id}/connectors/{connector_id}",
+    path = "/account/{account_id}/connectors/{merchant_connector_id}",
     params(
         ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
-        ("connector_id" = i32, Path, description = "The unique identifier for the Merchant Connector")
+        ("merchant_connector_id" = String, Path, description = "The unique identifier for the Merchant Connector")
     ),
     responses(
         (status = 200, description = "Merchant Connector retrieved successfully", body = MerchantConnectorResponse),
@@ -142,7 +145,7 @@ pub async fn connector_create() {}
     ),
     tag = "Merchant Connector Account",
     operation_id = "Retrieve a Merchant Connector",
-    security(("admin_api_key" = []))
+    security(("api_key" = []))
 )]
 pub async fn connector_retrieve() {}
 
@@ -172,7 +175,7 @@ pub async fn connector_retrieve() {}
 /// List Merchant Connector Details for the merchant
 #[utoipa::path(
     get,
-    path = "/accounts/{account_id}/connectors",
+    path = "/account/{account_id}/connectors",
     params(
         ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
     ),
@@ -183,7 +186,7 @@ pub async fn connector_retrieve() {}
     ),
     tag = "Merchant Connector Account",
     operation_id = "List all Merchant Connectors",
-    security(("admin_api_key" = []))
+    security(("api_key" = []))
 )]
 pub async fn connector_list() {}
 
@@ -193,7 +196,7 @@ pub async fn connector_list() {}
 #[cfg(feature = "v1")]
 #[utoipa::path(
     post,
-    path = "/accounts/{account_id}/connectors/{connector_id}",
+    path = "/account/{account_id}/connectors/{merchant_connector_id}",
     request_body(
         content = MerchantConnectorUpdate,
         examples(
@@ -222,7 +225,7 @@ pub async fn connector_list() {}
     ),
     params(
         ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
-        ("connector_id" = i32, Path, description = "The unique identifier for the Merchant Connector")
+        ("merchant_connector_id" = String, Path, description = "The unique identifier for the Merchant Connector")
     ),
     responses(
         (status = 200, description = "Merchant Connector Updated", body = MerchantConnectorResponse),
@@ -231,7 +234,7 @@ pub async fn connector_list() {}
     ),
    tag = "Merchant Connector Account",
    operation_id = "Update a Merchant Connector",
-   security(("admin_api_key" = []))
+   security(("api_key" = []))
 )]
 pub async fn connector_update() {}
 
@@ -288,10 +291,10 @@ pub async fn connector_update() {}
 #[cfg(feature = "v1")]
 #[utoipa::path(
     delete,
-    path = "/accounts/{account_id}/connectors/{connector_id}",
+    path = "/account/{account_id}/connectors/{merchant_connector_id}",
     params(
         ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
-        ("connector_id" = i32, Path, description = "The unique identifier for the Merchant Connector")
+        ("merchant_connector_id" = String, Path, description = "The unique identifier for the Merchant Connector")
     ),
     responses(
         (status = 200, description = "Merchant Connector Deleted", body = MerchantConnectorDeleteResponse),
@@ -324,3 +327,66 @@ pub async fn connector_delete() {}
     security(("admin_api_key" = []))
 )]
 pub async fn connector_delete() {}
+
+/// Configure Connector Webhook - Register
+///
+/// Setup webhook configuration for an existing Merchant at the connector.
+#[cfg(feature = "v1")]
+#[utoipa::path(
+    post,
+    path = "/account/{account_id}/webhooks/{merchant_connector_id}",
+    request_body(
+        content = ConnectorWebhookRegisterRequest,
+        examples(
+            (
+                "Register a standard webhook" = (
+                    value = json! ({
+                        "event_type": "standard",
+                })
+                )
+            ),
+            (
+                "Register  webhook for a specific event" = (
+                    value = json! ({
+                         "event_type": {
+                            "specific_event": "payment_succeeded"
+                        }
+                    })
+                )
+            )
+        ),
+    ),
+    params(
+        ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
+        ("merchant_connector_id" = String, Path, description = "The unique identifier for the Merchant Connector")
+    ),
+    responses(
+        (status = 200, description = "Connector Webhook Registered", body = RegisterConnectorWebhookResponse),
+        (status = 401, description = "Unauthorized request")
+    ),
+    tag = "Merchant Connector Account",
+    operation_id = "Register a Connector Webhook",
+   security(("api_key" = []))
+)]
+pub async fn connector_webhook_register() {}
+
+/// Configure Connector Webhook - Register
+///
+/// List webhooks configured with hyperswitch at the connector
+#[cfg(feature = "v1")]
+#[utoipa::path(
+    get,
+    path = "/account/{account_id}/webhooks/{merchant_connector_id}",
+    params(
+        ("account_id" = String, Path, description = "The unique identifier for the merchant account"),
+        ("merchant_connector_id" = String, Path, description = "The unique identifier for the Merchant Connector")
+    ),
+      responses(
+        (status = 200, description = "List of webhooks configured with hyperswitch at the connector", body = ConnectorWebhookListResponse),
+        (status = 401, description = "Unauthorized request")
+    ),
+    tag = "Merchant Connector Account",
+    operation_id = "List Connector Webhooks",
+    security(("api_key" = []))
+)]
+pub async fn retrieve_connector_webhook() {}

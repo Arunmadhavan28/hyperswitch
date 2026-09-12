@@ -1,41 +1,63 @@
 //! Revenue Recovery Interface
 
 use hyperswitch_domain_models::{
-    router_flow_types::{GetAdditionalRevenueRecoveryDetails, RecoveryRecordBack},
+    router_flow_types::{
+        BillingConnectorInvoiceSync, BillingConnectorPaymentsSync, DisputeRecordBack,
+        InvoiceRecordBack,
+    },
     router_request_types::revenue_recovery::{
-        GetAdditionalRevenueRecoveryRequestData, RevenueRecoveryRecordBackRequest,
+        BillingConnectorInvoiceSyncRequest, BillingConnectorPaymentsSyncRequest,
+        DisputeRecordBackRequest, InvoiceRecordBackRequest,
     },
     router_response_types::revenue_recovery::{
-        GetAdditionalRevenueRecoveryResponseData, RevenueRecoveryRecordBackResponse,
+        BillingConnectorInvoiceSyncResponse, BillingConnectorPaymentsSyncResponse,
+        DisputeRecordBackResponse, InvoiceRecordBackResponse,
     },
 };
 
 #[cfg(all(feature = "v2", feature = "revenue_recovery"))]
 use super::ConnectorCommon;
 use super::ConnectorIntegration;
+
 /// trait RevenueRecovery
 #[cfg(all(feature = "v2", feature = "revenue_recovery"))]
 pub trait RevenueRecovery:
-    ConnectorCommon + AdditionalRevenueRecovery + RevenueRecoveryRecordBack
+    ConnectorCommon
+    + BillingConnectorPaymentsSyncIntegration
+    + RevenueRecoveryRecordBack
+    + RevenueRecoveryDisputeRecordBack
+    + BillingConnectorInvoiceSyncIntegration
 {
 }
 
-/// trait AdditionalRevenueRecovery
-pub trait AdditionalRevenueRecovery:
+/// trait BillingConnectorPaymentsSyncIntegration
+pub trait BillingConnectorPaymentsSyncIntegration:
     ConnectorIntegration<
-    GetAdditionalRevenueRecoveryDetails,
-    GetAdditionalRevenueRecoveryRequestData,
-    GetAdditionalRevenueRecoveryResponseData,
+    BillingConnectorPaymentsSync,
+    BillingConnectorPaymentsSyncRequest,
+    BillingConnectorPaymentsSyncResponse,
 >
 {
 }
 
 /// trait RevenueRecoveryRecordBack
 pub trait RevenueRecoveryRecordBack:
+    ConnectorIntegration<InvoiceRecordBack, InvoiceRecordBackRequest, InvoiceRecordBackResponse>
+{
+}
+
+/// trait RevenueRecoveryDisputeRecordBack
+pub trait RevenueRecoveryDisputeRecordBack:
+    ConnectorIntegration<DisputeRecordBack, DisputeRecordBackRequest, DisputeRecordBackResponse>
+{
+}
+
+/// trait BillingConnectorInvoiceSyncIntegration
+pub trait BillingConnectorInvoiceSyncIntegration:
     ConnectorIntegration<
-    RecoveryRecordBack,
-    RevenueRecoveryRecordBackRequest,
-    RevenueRecoveryRecordBackResponse,
+    BillingConnectorInvoiceSync,
+    BillingConnectorInvoiceSyncRequest,
+    BillingConnectorInvoiceSyncResponse,
 >
 {
 }

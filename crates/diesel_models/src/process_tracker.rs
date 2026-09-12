@@ -1,11 +1,14 @@
-use common_enums::ApiVersion;
+pub use common_enums::{enums::ProcessTrackerRunner, ApiVersion};
 use common_utils::ext_traits::Encode;
 use diesel::{AsChangeset, Identifiable, Insertable, Queryable, Selectable};
 use error_stack::ResultExt;
 use serde::{Deserialize, Serialize};
 use time::PrimitiveDateTime;
 
-use crate::{enums as storage_enums, errors, schema::process_tracker, StorageResult};
+use crate::{
+    enums as storage_enums, enums::ApplicationSource, errors, schema::process_tracker,
+    StorageResult,
+};
 
 #[derive(
     Clone,
@@ -40,6 +43,7 @@ pub struct ProcessTracker {
     #[serde(with = "common_utils::custom_serde::iso8601")]
     pub updated_at: PrimitiveDateTime,
     pub version: ApiVersion,
+    pub application_source: Option<ApplicationSource>,
 }
 
 impl ProcessTracker {
@@ -66,6 +70,7 @@ pub struct ProcessTrackerNew {
     pub created_at: PrimitiveDateTime,
     pub updated_at: PrimitiveDateTime,
     pub version: ApiVersion,
+    pub application_source: Option<ApplicationSource>,
 }
 
 impl ProcessTrackerNew {
@@ -79,6 +84,7 @@ impl ProcessTrackerNew {
         retry_count: Option<i32>,
         schedule_time: PrimitiveDateTime,
         api_version: ApiVersion,
+        application_source: ApplicationSource,
     ) -> StorageResult<Self>
     where
         T: Serialize + std::fmt::Debug,
@@ -102,6 +108,7 @@ impl ProcessTrackerNew {
             created_at: current_time,
             updated_at: current_time,
             version: api_version,
+            application_source: Some(application_source),
         })
     }
 }
@@ -196,33 +203,8 @@ impl From<ProcessTrackerUpdate> for ProcessTrackerUpdateInternal {
     }
 }
 
-#[derive(
-    serde::Serialize,
-    serde::Deserialize,
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    strum::EnumString,
-    strum::Display,
-)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-pub enum ProcessTrackerRunner {
-    PaymentsSyncWorkflow,
-    RefundWorkflowRouter,
-    DeleteTokenizeDataWorkflow,
-    ApiKeyExpiryWorkflow,
-    OutgoingWebhookRetryWorkflow,
-    AttachPayoutAccountWorkflow,
-    PaymentMethodStatusUpdateWorkflow,
-    PassiveRecoveryWorkflow,
-}
-
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use common_utils::ext_traits::StringExt;
 
     use super::ProcessTrackerRunner;
@@ -279,6 +261,9 @@ pub mod business_status {
     /// This status indicates the completion of a execute task
     pub const EXECUTE_WORKFLOW_COMPLETE: &str = "COMPLETED_EXECUTE_TASK";
 
+    /// This status indicates the failure of a execute task
+    pub const EXECUTE_WORKFLOW_FAILURE: &str = "FAILED_EXECUTE_TASK";
+
     /// This status indicates that the execute task was completed to trigger the psync task
     pub const EXECUTE_WORKFLOW_COMPLETE_FOR_PSYNC: &str = "COMPLETED_EXECUTE_TASK_TO_TRIGGER_PSYNC";
 
@@ -286,6 +271,35 @@ pub mod business_status {
     pub const EXECUTE_WORKFLOW_COMPLETE_FOR_REVIEW: &str =
         "COMPLETED_EXECUTE_TASK_TO_TRIGGER_REVIEW";
 
+    /// This status indicates that the requeue was triggered for execute task
+    pub const EXECUTE_WORKFLOW_REQUEUE: &str = "TRIGGER_REQUEUE_FOR_EXECUTE_WORKFLOW";
+
     /// This status indicates the completion of a psync task
     pub const PSYNC_WORKFLOW_COMPLETE: &str = "COMPLETED_PSYNC_TASK";
+
+    /// This status indicates that the psync task was completed to trigger the review task
+    pub const PSYNC_WORKFLOW_COMPLETE_FOR_REVIEW: &str = "COMPLETED_PSYNC_TASK_TO_TRIGGER_REVIEW";
+
+    /// This status indicates that the requeue was triggered for psync task
+    pub const PSYNC_WORKFLOW_REQUEUE: &str = "TRIGGER_REQUEUE_FOR_PSYNC_WORKFLOW";
+
+    /// This status indicates the completion of a review task
+    pub const REVIEW_WORKFLOW_COMPLETE: &str = "COMPLETED_REVIEW_TASK";
+
+    /// For the CALCULATE_WORKFLOW
+    ///
+    /// This status indicates an invoice is queued
+    pub const CALCULATE_WORKFLOW_QUEUED: &str = "CALCULATE_WORKFLOW_QUEUED";
+
+    /// This status indicates an invoice has been declined due to hard decline
+    pub const CALCULATE_WORKFLOW_FINISH: &str = "FAILED_DUE_TO_HARD_DECLINE_ERROR";
+
+    /// This status indicates that the invoice is scheduled with the best available token
+    pub const CALCULATE_WORKFLOW_SCHEDULED: &str = "CALCULATE_WORKFLOW_SCHEDULED";
+
+    /// This status indicates the invoice is in payment sync state
+    pub const CALCULATE_WORKFLOW_PROCESSING: &str = "CALCULATE_WORKFLOW_PROCESSING";
+
+    /// This status indicates the workflow has completed successfully when the invoice is paid
+    pub const CALCULATE_WORKFLOW_COMPLETE: &str = "CALCULATE_WORKFLOW_COMPLETE";
 }

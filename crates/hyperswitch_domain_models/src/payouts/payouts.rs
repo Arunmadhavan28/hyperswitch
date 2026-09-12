@@ -7,22 +7,22 @@ use time::PrimitiveDateTime;
 use super::payout_attempt::PayoutAttempt;
 #[cfg(feature = "olap")]
 use super::PayoutFetchConstraints;
-use crate::errors;
 
 #[async_trait::async_trait]
 pub trait PayoutsInterface {
+    type Error;
     async fn insert_payout(
         &self,
         _payout: PayoutsNew,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Payouts, errors::StorageError>;
+    ) -> error_stack::Result<Payouts, Self::Error>;
 
     async fn find_payout_by_merchant_id_payout_id(
         &self,
         _merchant_id: &id_type::MerchantId,
-        _payout_id: &str,
+        _payout_id: &id_type::PayoutId,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Payouts, errors::StorageError>;
+    ) -> error_stack::Result<Payouts, Self::Error>;
 
     async fn update_payout(
         &self,
@@ -30,14 +30,14 @@ pub trait PayoutsInterface {
         _payout: PayoutsUpdate,
         _payout_attempt: &PayoutAttempt,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Payouts, errors::StorageError>;
+    ) -> error_stack::Result<Payouts, Self::Error>;
 
     async fn find_optional_payout_by_merchant_id_payout_id(
         &self,
         _merchant_id: &id_type::MerchantId,
-        _payout_id: &str,
+        _payout_id: &id_type::PayoutId,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Option<Payouts>, errors::StorageError>;
+    ) -> error_stack::Result<Option<Payouts>, Self::Error>;
 
     #[cfg(feature = "olap")]
     async fn filter_payouts_by_constraints(
@@ -45,7 +45,7 @@ pub trait PayoutsInterface {
         _merchant_id: &id_type::MerchantId,
         _filters: &PayoutFetchConstraints,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Vec<Payouts>, errors::StorageError>;
+    ) -> error_stack::Result<Vec<Payouts>, Self::Error>;
 
     #[cfg(feature = "olap")]
     async fn filter_payouts_and_attempts(
@@ -60,7 +60,7 @@ pub trait PayoutsInterface {
             Option<diesel_models::Customer>,
             Option<diesel_models::Address>,
         )>,
-        errors::StorageError,
+        Self::Error,
     >;
 
     #[cfg(feature = "olap")]
@@ -69,31 +69,40 @@ pub trait PayoutsInterface {
         _merchant_id: &id_type::MerchantId,
         _time_range: &common_utils::types::TimeRange,
         _storage_scheme: MerchantStorageScheme,
-    ) -> error_stack::Result<Vec<Payouts>, errors::StorageError>;
+    ) -> error_stack::Result<Vec<Payouts>, Self::Error>;
 
     #[cfg(feature = "olap")]
     #[allow(clippy::too_many_arguments)]
     async fn get_total_count_of_filtered_payouts(
         &self,
         _merchant_id: &id_type::MerchantId,
-        _active_payout_ids: &[String],
+        _active_payout_ids: &[id_type::PayoutId],
+        _profile_id_list: Option<Vec<id_type::ProfileId>>,
         _connector: Option<Vec<api_models::enums::PayoutConnectors>>,
         _currency: Option<Vec<storage_enums::Currency>>,
         _status: Option<Vec<storage_enums::PayoutStatus>>,
         _payout_method: Option<Vec<storage_enums::PayoutType>>,
-    ) -> error_stack::Result<i64, errors::StorageError>;
+    ) -> error_stack::Result<i64, Self::Error>;
 
     #[cfg(feature = "olap")]
     async fn filter_active_payout_ids_by_constraints(
         &self,
         _merchant_id: &id_type::MerchantId,
         _constraints: &PayoutFetchConstraints,
-    ) -> error_stack::Result<Vec<String>, errors::StorageError>;
+    ) -> error_stack::Result<Vec<id_type::PayoutId>, Self::Error>;
+
+    #[cfg(feature = "olap")]
+    async fn get_payout_intent_status_with_count(
+        &self,
+        merchant_id: &id_type::MerchantId,
+        profile_id_list: Option<Vec<id_type::ProfileId>>,
+        constraints: &common_utils::types::TimeRange,
+    ) -> error_stack::Result<Vec<(common_enums::PayoutStatus, i64)>, Self::Error>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Payouts {
-    pub payout_id: String,
+    pub payout_id: id_type::PayoutId,
     pub merchant_id: id_type::MerchantId,
     pub customer_id: Option<id_type::CustomerId>,
     pub address_id: Option<String>,
@@ -117,11 +126,15 @@ pub struct Payouts {
     pub payout_link_id: Option<String>,
     pub client_secret: Option<String>,
     pub priority: Option<storage_enums::PayoutSendPriority>,
+    pub organization_id: Option<id_type::OrganizationId>,
+    pub processor_merchant_id: Option<id_type::MerchantId>,
+    pub created_by: Option<common_utils::types::CreatedBy>,
+    pub billing_descriptor: Option<common_types::payouts::PayoutsBillingDescriptor>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayoutsNew {
-    pub payout_id: String,
+    pub payout_id: id_type::PayoutId,
     pub merchant_id: id_type::MerchantId,
     pub customer_id: Option<id_type::CustomerId>,
     pub address_id: Option<String>,
@@ -145,6 +158,10 @@ pub struct PayoutsNew {
     pub payout_link_id: Option<String>,
     pub client_secret: Option<String>,
     pub priority: Option<storage_enums::PayoutSendPriority>,
+    pub organization_id: Option<id_type::OrganizationId>,
+    pub processor_merchant_id: Option<id_type::MerchantId>,
+    pub created_by: Option<common_utils::types::CreatedBy>,
+    pub billing_descriptor: Option<common_types::payouts::PayoutsBillingDescriptor>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -165,6 +182,7 @@ pub enum PayoutsUpdate {
         payout_type: Option<storage_enums::PayoutType>,
         address_id: Option<String>,
         customer_id: Option<id_type::CustomerId>,
+        billing_descriptor: Option<Box<common_types::payouts::PayoutsBillingDescriptor>>,
     },
     PayoutMethodIdUpdate {
         payout_method_id: String,
@@ -177,6 +195,13 @@ pub enum PayoutsUpdate {
     },
     StatusUpdate {
         status: storage_enums::PayoutStatus,
+    },
+    StatusAndMetadataUpdate {
+        status: storage_enums::PayoutStatus,
+        metadata: Option<pii::SecretSerdeValue>,
+    },
+    ManualUpdate {
+        status: Option<storage_enums::PayoutStatus>,
     },
 }
 
@@ -199,6 +224,7 @@ pub struct PayoutsUpdateInternal {
     pub payout_type: Option<common_enums::PayoutType>,
     pub address_id: Option<String>,
     pub customer_id: Option<id_type::CustomerId>,
+    pub billing_descriptor: Option<common_types::payouts::PayoutsBillingDescriptor>,
 }
 
 impl From<PayoutsUpdate> for PayoutsUpdateInternal {
@@ -220,6 +246,7 @@ impl From<PayoutsUpdate> for PayoutsUpdateInternal {
                 payout_type,
                 address_id,
                 customer_id,
+                billing_descriptor,
             } => Self {
                 amount: Some(amount),
                 destination_currency: Some(destination_currency),
@@ -236,6 +263,7 @@ impl From<PayoutsUpdate> for PayoutsUpdateInternal {
                 payout_type,
                 address_id,
                 customer_id,
+                billing_descriptor: billing_descriptor.map(|descriptor| *descriptor),
                 ..Default::default()
             },
             PayoutsUpdate::PayoutMethodIdUpdate { payout_method_id } => Self {
@@ -252,6 +280,15 @@ impl From<PayoutsUpdate> for PayoutsUpdateInternal {
             },
             PayoutsUpdate::StatusUpdate { status } => Self {
                 status: Some(status),
+                ..Default::default()
+            },
+            PayoutsUpdate::StatusAndMetadataUpdate { status, metadata } => Self {
+                status: Some(status),
+                metadata,
+                ..Default::default()
+            },
+            PayoutsUpdate::ManualUpdate { status } => Self {
+                status,
                 ..Default::default()
             },
         }

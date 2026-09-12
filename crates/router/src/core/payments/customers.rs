@@ -1,16 +1,19 @@
-use common_utils::pii;
-use masking::ExposeOptionInterface;
+pub use hyperswitch_domain_models::customer::update_connector_customer_in_customers;
+use hyperswitch_interfaces::api::{gateway, ConnectorSpecifications};
+use hyperswitch_masking::PeekInterface;
 use router_env::{instrument, tracing};
 
+#[cfg(feature = "v2")]
+use crate::types::domain;
 use crate::{
     core::{
         errors::{ConnectorErrorExt, RouterResult},
-        payments,
+        payments::{self, gateway::context as gateway_context},
     },
     logger,
     routes::{metrics, SessionState},
     services,
-    types::{self, api, domain, storage},
+    types::{self, api},
 };
 
 #[instrument(skip_all)]
@@ -19,6 +22,7 @@ pub async fn create_connector_customer<F: Clone, T: Clone>(
     connector: &api::ConnectorData,
     router_data: &types::RouterData<F, T, types::PaymentsResponseData>,
     customer_request_data: types::ConnectorCustomerData,
+    gateway_context: &gateway_context::RouterGatewayContext,
 ) -> RouterResult<Option<String>> {
     let connector_integration: services::BoxedPaymentConnectorIntegrationInterface<
         api::CreateConnectorCustomer,
@@ -42,12 +46,14 @@ pub async fn create_connector_customer<F: Clone, T: Clone>(
         customer_response_data,
     );
 
-    let resp = services::execute_connector_processing_step(
+    let resp = gateway::execute_payment_gateway(
         state,
         connector_integration,
         &customer_router_data,
         payments::CallConnectorAction::Trigger,
         None,
+        None,
+        gateway_context.clone(),
     )
     .await
     .to_payment_failed_response()?;
@@ -59,9 +65,9 @@ pub async fn create_connector_customer<F: Clone, T: Clone>(
 
     let connector_customer_id = match resp.response {
         Ok(response) => match response {
-            types::PaymentsResponseData::ConnectorCustomerResponse {
-                connector_customer_id,
-            } => Some(connector_customer_id),
+            types::PaymentsResponseData::ConnectorCustomerResponse(customer_data) => {
+                Some(customer_data.connector_customer_id)
+            }
             _ => None,
         },
         Err(err) => {
@@ -73,98 +79,85 @@ pub async fn create_connector_customer<F: Clone, T: Clone>(
     Ok(connector_customer_id)
 }
 
-#[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
+#[cfg(feature = "v1")]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ConnectorCustomerAction<'a> {
+    CreateCustomer,
+    StoreGeneratedCustomerId(String),
+    UseExistingCustomer(Option<&'a str>),
+}
+
+#[cfg(feature = "v1")]
 pub fn should_call_connector_create_customer<'a>(
-    state: &SessionState,
     connector: &api::ConnectorData,
-    customer: &'a Option<domain::Customer>,
+    connector_customer_map: Option<&'a common_utils::pii::SecretSerdeValue>,
+    payment_attempt: &hyperswitch_domain_models::payments::payment_attempt::PaymentAttempt,
     connector_label: &str,
-) -> (bool, Option<&'a str>) {
+) -> ConnectorCustomerAction<'a> {
     // Check if create customer is required for the connector
-    let connector_needs_customer = state
-        .conf
-        .connector_customer
-        .connector_list
-        .contains(&connector.connector_name);
+    let mca_string = payment_attempt
+        .merchant_connector_id
+        .clone()
+        .map(|mca_id| mca_id.get_string_repr().to_string())
+        .unwrap_or_else(|| connector_label.to_string());
 
-    if connector_needs_customer {
-        let connector_customer_details = customer
-            .as_ref()
-            .and_then(|customer| customer.get_connector_customer_id(connector_label));
-        let should_call_connector = connector_customer_details.is_none();
-        (should_call_connector, connector_customer_details)
-    } else {
-        (false, None)
-    }
-}
+    let connector_needs_customer = connector
+        .connector
+        .should_call_connector_customer(payment_attempt);
 
-#[cfg(all(feature = "v2", feature = "customer_v2"))]
-pub fn should_call_connector_create_customer<'a>(
-    state: &SessionState,
-    connector: &api::ConnectorData,
-    customer: &'a Option<domain::Customer>,
-    merchant_connector_id: &common_utils::id_type::MerchantConnectorAccountId,
-) -> (bool, Option<&'a str>) {
-    // Check if create customer is required for the connector
-    let connector_needs_customer = state
-        .conf
-        .connector_customer
-        .connector_list
-        .contains(&connector.connector_name);
+    let connector_customer_details = connector_customer_map
+        .and_then(|connector_customer_map| connector_customer_map.peek().get(mca_string.as_str()))
+        .and_then(|connector_customer| connector_customer.as_str());
 
-    if connector_needs_customer {
-        let connector_customer_details = customer
-            .as_ref()
-            .and_then(|customer| customer.get_connector_customer_id(merchant_connector_id));
-        let should_call_connector = connector_customer_details.is_none();
-        (should_call_connector, connector_customer_details)
-    } else {
-        (false, None)
-    }
-}
-
-#[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
-#[instrument]
-pub async fn update_connector_customer_in_customers(
-    connector_label: &str,
-    customer: Option<&domain::Customer>,
-    connector_customer_id: Option<String>,
-) -> Option<storage::CustomerUpdate> {
-    let mut connector_customer_map = customer
-        .and_then(|customer| customer.connector_customer.clone().expose_option())
-        .and_then(|connector_customer| connector_customer.as_object().cloned())
-        .unwrap_or_default();
-
-    let updated_connector_customer_map = connector_customer_id.map(|connector_customer_id| {
-        let connector_customer_value = serde_json::Value::String(connector_customer_id);
-        connector_customer_map.insert(connector_label.to_string(), connector_customer_value);
-        connector_customer_map
-    });
-
-    updated_connector_customer_map
-        .map(serde_json::Value::Object)
-        .map(
-            |connector_customer_value| storage::CustomerUpdate::ConnectorCustomer {
-                connector_customer: Some(pii::SecretSerdeValue::new(connector_customer_value)),
-            },
-        )
-}
-
-#[cfg(all(feature = "v2", feature = "customer_v2"))]
-#[instrument]
-pub async fn update_connector_customer_in_customers(
-    merchant_connector_id: common_utils::id_type::MerchantConnectorAccountId,
-    customer: Option<&domain::Customer>,
-    connector_customer_id: Option<String>,
-) -> Option<storage::CustomerUpdate> {
-    connector_customer_id.map(|connector_customer_id| {
-        let mut connector_customer_map = customer
-            .and_then(|customer| customer.connector_customer.clone())
-            .unwrap_or_default();
-        connector_customer_map.insert(merchant_connector_id, connector_customer_id);
-
-        storage::CustomerUpdate::ConnectorCustomer {
-            connector_customer: Some(connector_customer_map),
+    match connector_needs_customer {
+        hyperswitch_interfaces::api::ConnectorCustomerAction::CallConnectorCustomer => {
+            match connector_customer_details {
+                Some(existing_customer_id) => {
+                    ConnectorCustomerAction::UseExistingCustomer(Some(existing_customer_id))
+                }
+                None => ConnectorCustomerAction::CreateCustomer,
+            }
         }
-    })
+        hyperswitch_interfaces::api::ConnectorCustomerAction::NoAction => {
+            ConnectorCustomerAction::UseExistingCustomer(connector_customer_details)
+        }
+        hyperswitch_interfaces::api::ConnectorCustomerAction::GeneratedCustomerId(customer_id) => {
+            match connector_customer_details {
+                Some(existing_customer_id) => {
+                    ConnectorCustomerAction::UseExistingCustomer(Some(existing_customer_id))
+                }
+                None => ConnectorCustomerAction::StoreGeneratedCustomerId(customer_id),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "v2")]
+pub fn should_call_connector_create_customer<'a>(
+    connector: &api::ConnectorData,
+    customer: &'a Option<domain::Customer>,
+    merchant_connector_account: &domain::MerchantConnectorAccountTypeDetails,
+) -> (bool, Option<&'a str>) {
+    // Check if create customer is required for the connector
+    match merchant_connector_account {
+        domain::MerchantConnectorAccountTypeDetails::MerchantConnectorAccount(_) => {
+            let connector_needs_customer = connector.connector.should_call_connector_customer();
+
+            match connector_needs_customer {
+                hyperswitch_interfaces::api::ConnectorCustomerAction::CallConnectorCustomer => {
+                    let connector_customer_details = customer.as_ref().and_then(|cust| {
+                        cust.get_connector_customer_id(merchant_connector_account)
+                    });
+                    let should_call_connector = connector_customer_details.is_none();
+                    (should_call_connector, connector_customer_details)
+                }
+                _ => (false, None),
+            }
+        }
+
+        // TODO: Construct connector_customer for MerchantConnectorDetails if required by connector.
+        domain::MerchantConnectorAccountTypeDetails::MerchantConnectorDetails(_) => {
+            todo!("Handle connector_customer construction for MerchantConnectorDetails");
+        }
+    }
 }

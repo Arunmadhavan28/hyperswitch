@@ -6,7 +6,7 @@ use api::auth_service::{BankAccountCredentials, ExchangeToken, LinkToken, Recipi
 use api_models::enums as api_enums;
 use common_enums::{CountryAlpha2, PaymentMethod, PaymentMethodType};
 use common_utils::{id_type, types};
-use masking::Secret;
+use hyperswitch_masking::Secret;
 
 #[derive(Debug, Clone)]
 pub struct PaymentAuthRouterData<F, Request, Response> {
@@ -135,8 +135,19 @@ pub enum RecipientAccountData {
         sort_code: Secret<String>,
         account_number: Secret<String>,
     },
+    FasterPayments {
+        sort_code: Secret<String>,
+        account_number: Secret<String>,
+    },
+    Sepa(Secret<String>),
+    SepaInstant(Secret<String>),
+    Elixir {
+        account_number: Secret<String>,
+        iban: Secret<String>,
+    },
+    Bankgiro(Secret<String>),
+    Plusgiro(Secret<String>),
 }
-
 #[derive(Debug, Clone)]
 pub struct RecipientCreateAddress {
     pub street: String,
@@ -204,6 +215,32 @@ pub enum MerchantAccountData {
     Bacs {
         account_number: Secret<String>,
         sort_code: Secret<String>,
+        name: String,
+    },
+    FasterPayments {
+        account_number: Secret<String>,
+        sort_code: Secret<String>,
+        name: String,
+    },
+    Sepa {
+        iban: Secret<String>,
+        name: String,
+    },
+    SepaInstant {
+        iban: Secret<String>,
+        name: String,
+    },
+    Elixir {
+        account_number: Secret<String>,
+        iban: Secret<String>,
+        name: String,
+    },
+    Bankgiro {
+        number: Secret<String>,
+        name: String,
+    },
+    Plusgiro {
+        number: Secret<String>,
         name: String,
     },
 }

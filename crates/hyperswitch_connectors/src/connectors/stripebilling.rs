@@ -2,6 +2,7 @@ pub mod transformers;
 
 use std::collections::HashMap;
 
+use common_enums::enums;
 use common_utils::{
     errors::CustomResult,
     ext_traits::BytesExt,
@@ -9,19 +10,28 @@ use common_utils::{
     types::{AmountConvertor, StringMinorUnit, StringMinorUnitForConnector},
 };
 use error_stack::{report, ResultExt};
+#[cfg(all(feature = "v2", feature = "revenue_recovery"))]
+use hyperswitch_domain_models::revenue_recovery;
+#[cfg(all(feature = "v2", feature = "revenue_recovery"))]
+use hyperswitch_domain_models::types as recovery_router_data_types;
 use hyperswitch_domain_models::{
     router_data::{AccessToken, ConnectorAuthType, ErrorResponse, RouterData},
     router_flow_types::{
         access_token_auth::AccessTokenAuth,
         payments::{Authorize, Capture, PSync, PaymentMethodToken, Session, SetupMandate, Void},
         refunds::{Execute, RSync},
+        revenue_recovery as recovery_router_flows, subscriptions as subscription_flow_types,
     },
     router_request_types::{
+        revenue_recovery as recovery_request_types, subscriptions as subscription_request_types,
         AccessTokenRequestData, PaymentMethodTokenizationData, PaymentsAuthorizeData,
         PaymentsCancelData, PaymentsCaptureData, PaymentsSessionData, PaymentsSyncData,
         RefundsData, SetupMandateRequestData,
     },
-    router_response_types::{PaymentsResponseData, RefundsResponseData},
+    router_response_types::{
+        revenue_recovery as recovery_response_types, subscriptions as subscription_response_types,
+        ConnectorInfo, PaymentsResponseData, RefundsResponseData,
+    },
     types::{
         PaymentsAuthorizeRouterData, PaymentsCaptureRouterData, PaymentsSyncRouterData,
         RefundSyncRouterData, RefundsRouterData,
@@ -29,8 +39,8 @@ use hyperswitch_domain_models::{
 };
 use hyperswitch_interfaces::{
     api::{
-        self, ConnectorCommon, ConnectorCommonExt, ConnectorIntegration, ConnectorSpecifications,
-        ConnectorValidation,
+        self, subscriptions as subscriptions_api, ConnectorCommon, ConnectorCommonExt,
+        ConnectorIntegration, ConnectorSpecifications, ConnectorValidation,
     },
     configs::Connectors,
     errors,
@@ -38,7 +48,8 @@ use hyperswitch_interfaces::{
     types::{self, Response},
     webhooks,
 };
-use masking::{ExposeInterface, Mask};
+use hyperswitch_masking::{Mask, PeekInterface};
+use stripebilling::auth_headers;
 use transformers as stripebilling;
 
 use crate::{constants::headers, types::ResponseRouterData, utils};
@@ -68,11 +79,82 @@ impl api::Refund for Stripebilling {}
 impl api::RefundExecute for Stripebilling {}
 impl api::RefundSync for Stripebilling {}
 impl api::PaymentToken for Stripebilling {}
+#[cfg(all(feature = "revenue_recovery", feature = "v2"))]
+impl api::revenue_recovery::RevenueRecoveryRecordBack for Stripebilling {}
+#[cfg(all(feature = "v2", feature = "revenue_recovery"))]
+impl api::revenue_recovery::BillingConnectorPaymentsSyncIntegration for Stripebilling {}
 
 impl ConnectorIntegration<PaymentMethodToken, PaymentMethodTokenizationData, PaymentsResponseData>
     for Stripebilling
 {
     // Not Implemented (R)
+}
+
+impl subscriptions_api::Subscriptions for Stripebilling {}
+impl subscriptions_api::GetSubscriptionItemsFlow for Stripebilling {}
+impl subscriptions_api::SubscriptionRecordBackFlow for Stripebilling {}
+impl subscriptions_api::SubscriptionCreate for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::GetSubscriptionItems,
+        subscription_request_types::GetSubscriptionItemsRequest,
+        subscription_response_types::GetSubscriptionItemsResponse,
+    > for Stripebilling
+{
+}
+impl subscriptions_api::GetSubscriptionPlanPricesFlow for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::GetSubscriptionItemPrices,
+        subscription_request_types::GetSubscriptionItemPricesRequest,
+        subscription_response_types::GetSubscriptionItemPricesResponse,
+    > for Stripebilling
+{
+}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::SubscriptionCreate,
+        subscription_request_types::SubscriptionCreateRequest,
+        subscription_response_types::SubscriptionCreateResponse,
+    > for Stripebilling
+{
+}
+impl subscriptions_api::GetSubscriptionEstimateFlow for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::GetSubscriptionEstimate,
+        subscription_request_types::GetSubscriptionEstimateRequest,
+        subscription_response_types::GetSubscriptionEstimateResponse,
+    > for Stripebilling
+{
+}
+
+impl subscriptions_api::SubscriptionCancelFlow for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::SubscriptionCancel,
+        subscription_request_types::SubscriptionCancelRequest,
+        subscription_response_types::SubscriptionCancelResponse,
+    > for Stripebilling
+{
+}
+impl subscriptions_api::SubscriptionPauseFlow for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::SubscriptionPause,
+        subscription_request_types::SubscriptionPauseRequest,
+        subscription_response_types::SubscriptionPauseResponse,
+    > for Stripebilling
+{
+}
+impl subscriptions_api::SubscriptionResumeFlow for Stripebilling {}
+impl
+    ConnectorIntegration<
+        subscription_flow_types::SubscriptionResume,
+        subscription_request_types::SubscriptionResumeRequest,
+        subscription_response_types::SubscriptionResumeResponse,
+    > for Stripebilling
+{
 }
 
 impl<Flow, Request, Response> ConnectorCommonExt<Flow, Request, Response> for Stripebilling
@@ -83,7 +165,8 @@ where
         &self,
         req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
             self.get_content_type().to_string().into(),
@@ -114,13 +197,20 @@ impl ConnectorCommon for Stripebilling {
     fn get_auth_header(
         &self,
         auth_type: &ConnectorAuthType,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let auth = stripebilling::StripebillingAuthType::try_from(auth_type)
             .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
-        Ok(vec![(
-            headers::AUTHORIZATION.to_string(),
-            auth.api_key.expose().into_masked(),
-        )])
+        Ok(vec![
+            (
+                headers::AUTHORIZATION.to_string(),
+                format!("Bearer {}", auth.api_key.peek()).into_masked(),
+            ),
+            (
+                auth_headers::STRIPE_API_VERSION.to_string(),
+                auth_headers::STRIPE_VERSION.to_string().into_masked(),
+            ),
+        ])
     }
 
     fn build_error_response(
@@ -143,8 +233,11 @@ impl ConnectorCommon for Stripebilling {
             reason: response.reason,
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -171,7 +264,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -259,7 +353,8 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Str
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -323,7 +418,8 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         &self,
         req: &PaymentsCaptureRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -402,7 +498,8 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Stripeb
         &self,
         req: &RefundsRouterData<Execute>,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -488,7 +585,8 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Stripebil
         &self,
         req: &RefundSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -535,6 +633,198 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Stripebil
         event_builder.map(|i| i.set_response_body(&response));
         router_env::logger::info!(connector_response=?response);
         RouterData::try_from(ResponseRouterData {
+            response,
+            data: data.clone(),
+            http_code: res.status_code,
+        })
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
+#[cfg(all(feature = "v2", feature = "revenue_recovery"))]
+impl
+    ConnectorIntegration<
+        recovery_router_flows::BillingConnectorPaymentsSync,
+        recovery_request_types::BillingConnectorPaymentsSyncRequest,
+        recovery_response_types::BillingConnectorPaymentsSyncResponse,
+    > for Stripebilling
+{
+    fn get_headers(
+        &self,
+        req: &recovery_router_data_types::BillingConnectorPaymentsSyncRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
+        self.build_headers(req, connectors)
+    }
+
+    fn get_content_type(&self) -> &'static str {
+        self.common_get_content_type()
+    }
+
+    fn get_url(
+        &self,
+        req: &recovery_router_data_types::BillingConnectorPaymentsSyncRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        Ok(format!(
+            "{}v1/charges/{}",
+            self.base_url(connectors),
+            req.request.billing_connector_psync_id
+        ))
+    }
+
+    fn build_request(
+        &self,
+        req: &recovery_router_data_types::BillingConnectorPaymentsSyncRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        let request = RequestBuilder::new()
+            .method(Method::Get)
+            .url(&types::BillingConnectorPaymentsSyncType::get_url(
+                self, req, connectors,
+            )?)
+            .attach_default_headers()
+            .headers(types::BillingConnectorPaymentsSyncType::get_headers(
+                self, req, connectors,
+            )?)
+            .build();
+        Ok(Some(request))
+    }
+
+    fn handle_response(
+        &self,
+        data: &recovery_router_data_types::BillingConnectorPaymentsSyncRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<
+        recovery_router_data_types::BillingConnectorPaymentsSyncRouterData,
+        errors::ConnectorError,
+    > {
+        let response: stripebilling::StripebillingRecoveryDetailsData = res
+            .response
+            .parse_struct::<stripebilling::StripebillingRecoveryDetailsData>(
+                "StripebillingRecoveryDetailsData",
+            )
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+
+        recovery_router_data_types::BillingConnectorPaymentsSyncRouterData::try_from(
+            ResponseRouterData {
+                response,
+                data: data.clone(),
+                http_code: res.status_code,
+            },
+        )
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
+#[cfg(feature = "v1")]
+impl
+    ConnectorIntegration<
+        recovery_router_flows::InvoiceRecordBack,
+        recovery_request_types::InvoiceRecordBackRequest,
+        recovery_response_types::InvoiceRecordBackResponse,
+    > for Stripebilling
+{
+}
+
+#[cfg(all(feature = "v2", feature = "revenue_recovery"))]
+impl
+    ConnectorIntegration<
+        recovery_router_flows::InvoiceRecordBack,
+        recovery_request_types::InvoiceRecordBackRequest,
+        recovery_response_types::InvoiceRecordBackResponse,
+    > for Stripebilling
+{
+    fn get_headers(
+        &self,
+        req: &recovery_router_data_types::InvoiceRecordBackRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
+        self.build_headers(req, connectors)
+    }
+
+    fn get_content_type(&self) -> &'static str {
+        self.common_get_content_type()
+    }
+
+    fn get_url(
+        &self,
+        req: &recovery_router_data_types::InvoiceRecordBackRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        let invoice_id = req
+            .request
+            .merchant_reference_id
+            .get_string_repr()
+            .to_string();
+        match req.request.attempt_status {
+            common_enums::AttemptStatus::Charged => Ok(format!(
+                "{}/v1/invoices/{invoice_id}/pay?paid_out_of_band=true",
+                self.base_url(connectors),
+            )),
+            common_enums::AttemptStatus::Failure => Ok(format!(
+                "{}/v1/invoices/{invoice_id}/void",
+                self.base_url(connectors),
+            )),
+            _ => Err(errors::ConnectorError::FailedToObtainIntegrationUrl.into()),
+        }
+    }
+
+    fn build_request(
+        &self,
+        req: &recovery_router_data_types::InvoiceRecordBackRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        Ok(Some(
+            RequestBuilder::new()
+                .method(Method::Post)
+                .url(&types::InvoiceRecordBackType::get_url(
+                    self, req, connectors,
+                )?)
+                .attach_default_headers()
+                .headers(types::InvoiceRecordBackType::get_headers(
+                    self, req, connectors,
+                )?)
+                .build(),
+        ))
+    }
+
+    fn handle_response(
+        &self,
+        data: &recovery_router_data_types::InvoiceRecordBackRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<recovery_router_data_types::InvoiceRecordBackRouterData, errors::ConnectorError>
+    {
+        let response = res
+            .response
+            .parse_struct::<stripebilling::StripebillingRecordBackResponse>(
+                "StripebillingRecordBackResponse",
+            )
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+        recovery_router_data_types::InvoiceRecordBackRouterData::try_from(ResponseRouterData {
             response,
             data: data.clone(),
             http_code: res.status_code,
@@ -611,10 +901,12 @@ impl webhooks::IncomingWebhook for Stripebilling {
     ) -> CustomResult<api_models::webhooks::ObjectReferenceId, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
+
     #[cfg(all(feature = "revenue_recovery", feature = "v2"))]
     fn get_webhook_event_type(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
         let webhook =
             stripebilling::StripebillingWebhookBody::get_webhook_object_from_body(request.body)
@@ -638,6 +930,7 @@ impl webhooks::IncomingWebhook for Stripebilling {
     fn get_webhook_event_type(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
@@ -646,7 +939,8 @@ impl webhooks::IncomingWebhook for Stripebilling {
     fn get_webhook_resource_object(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
 
@@ -654,12 +948,32 @@ impl webhooks::IncomingWebhook for Stripebilling {
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let webhook = stripebilling::StripebillingInvoiceBody::get_invoice_webhook_data_from_body(
             request.body,
         )
         .change_context(errors::ConnectorError::WebhookResourceObjectNotFound)?;
         Ok(Box::new(webhook))
+    }
+
+    #[cfg(all(feature = "revenue_recovery", feature = "v2"))]
+    fn get_revenue_recovery_attempt_details(
+        &self,
+        _request: &webhooks::IncomingWebhookRequestDetails<'_>,
+    ) -> CustomResult<revenue_recovery::RevenueRecoveryAttemptData, errors::ConnectorError> {
+        // since stripe requires an additional call we dont need to implement this function because we get the recovery data from additional call itself
+        Err(report!(errors::ConnectorError::WebhooksNotImplemented))
+    }
+    #[cfg(all(feature = "revenue_recovery", feature = "v2"))]
+    fn get_revenue_recovery_invoice_details(
+        &self,
+        request: &webhooks::IncomingWebhookRequestDetails<'_>,
+    ) -> CustomResult<revenue_recovery::RevenueRecoveryInvoiceData, errors::ConnectorError> {
+        let webhook = stripebilling::StripebillingInvoiceBody::get_invoice_webhook_data_from_body(
+            request.body,
+        )?;
+        revenue_recovery::RevenueRecoveryInvoiceData::try_from(webhook)
     }
 }
 
@@ -685,4 +999,22 @@ fn get_signature_elements_from_header(
     Ok(header_hashmap)
 }
 
-impl ConnectorSpecifications for Stripebilling {}
+static STRIPEBILLING_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+    display_name: "Stripebilling",
+    description: "Stripe Billing manages subscriptions, recurring payments, and invoicing. It supports trials, usage-based billing, coupons, and automated retries.",
+    connector_type: enums::HyperswitchConnectorCategory::RevenueGrowthManagementPlatform,
+    integration_status: enums::ConnectorIntegrationStatus::Beta,
+};
+
+static STRIPEBILLING_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 1] =
+    [enums::EventClass::Payments];
+
+impl ConnectorSpecifications for Stripebilling {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&STRIPEBILLING_CONNECTOR_INFO)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&STRIPEBILLING_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

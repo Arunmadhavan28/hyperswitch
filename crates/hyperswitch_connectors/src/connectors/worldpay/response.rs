@@ -1,6 +1,6 @@
 use error_stack::ResultExt;
 use hyperswitch_interfaces::errors;
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -18,11 +18,11 @@ pub struct WorldpayPaymentsResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WorldpayPaymentResponseFields {
-    AuthorizedResponse(Box<AuthorizedResponse>),
-    DDCResponse(DDCResponse),
-    FraudHighRisk(FraudHighRiskResponse),
     RefusedResponse(RefusedResponse),
+    DDCResponse(DDCResponse),
     ThreeDsChallenged(ThreeDsChallengedResponse),
+    FraudHighRisk(FraudHighRiskResponse),
+    AuthorizedResponse(Box<AuthorizedResponse>),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,11 +65,18 @@ pub struct FraudHighRiskResponse {
 #[serde(rename_all = "camelCase")]
 pub struct RefusedResponse {
     pub refusal_description: String,
+    // Access Worldpay returns a raw response code in the refusalCode field (if enabled) containing the unmodified response code received either directly from the card scheme for Worldpay-acquired transactions, or from third party acquirers.
     pub refusal_code: String,
     pub risk_factors: Option<Vec<RiskFactorsInner>>,
     pub fraud: Option<Fraud>,
     #[serde(rename = "threeDS")]
     pub three_ds: Option<ThreeDsResponse>,
+    pub advice: Option<Advice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Advice {
+    pub code: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -192,7 +199,7 @@ pub struct ActionLinks {
     settle_payment: Option<ActionLink>,
     partially_settle_payment: Option<ActionLink>,
     refund_payment: Option<ActionLink>,
-    partiall_refund_payment: Option<ActionLink>,
+    partially_refund_payment: Option<ActionLink>,
     cancel_payment: Option<ActionLink>,
 }
 
@@ -251,11 +258,6 @@ pub struct EventLinks {
     pub events: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
-pub struct PaymentLink {
-    pub href: String,
-}
-
 pub fn get_resource_id<T, F>(
     response: WorldpayPaymentsResponse,
     connector_transaction_id: Option<String>,
@@ -294,7 +296,7 @@ where
         .or_else(|| connector_transaction_id.map(transform_fn))
         .ok_or_else(|| {
             errors::ConnectorError::MissingRequiredField {
-                field_name: "_links.self.href",
+                field_name: "_links.self.href".into(),
             }
             .into()
         })
@@ -409,7 +411,7 @@ impl WorldpayErrorResponse {
     pub fn default(status_code: u16) -> Self {
         match status_code {
             code @ 404 => Self {
-                error_name: format!("{} Not found", code),
+                error_name: format!("{code} Not found"),
                 message: "Resource not found".to_string(),
                 validation_errors: None,
             },
@@ -446,20 +448,6 @@ pub struct WorldpayWebhookEventType {
     pub event_id: String,
     pub event_timestamp: String,
     pub event_details: EventDetails,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum WorldpayWebhookStatus {
-    SentForSettlement,
-    Authorized,
-    SentForAuthorization,
-    Cancelled,
-    Error,
-    Expired,
-    Refused,
-    SentForRefund,
-    RefundFailed,
 }
 
 /// Worldpay's unique reference ID for a request

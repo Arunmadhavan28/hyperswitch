@@ -20,16 +20,20 @@ pub mod diesel_exports {
         DbRefundStatus as RefundStatus, DbRefundType as RefundType, DbRelayStatus as RelayStatus,
         DbRelayType as RelayType,
         DbRequestIncrementalAuthorization as RequestIncrementalAuthorization,
-        DbRoleScope as RoleScope, DbRoutingAlgorithmKind as RoutingAlgorithmKind,
+        DbRevenueRecoveryAlgorithmType as RevenueRecoveryAlgorithmType, DbRoleScope as RoleScope,
+        DbRoutingAlgorithmKind as RoutingAlgorithmKind, DbRoutingApproach as RoutingApproach,
         DbScaExemptionType as ScaExemptionType,
         DbSuccessBasedRoutingConclusiveState as SuccessBasedRoutingConclusiveState,
-        DbTotpStatus as TotpStatus, DbTransactionType as TransactionType,
-        DbUserRoleVersion as UserRoleVersion, DbUserStatus as UserStatus,
-        DbWebhookDeliveryAttempt as WebhookDeliveryAttempt,
+        DbTokenizationFlag as TokenizationFlag, DbTotpStatus as TotpStatus,
+        DbTransactionType as TransactionType, DbUserRoleVersion as UserRoleVersion,
+        DbUserStatus as UserStatus, DbWebhookDeliveryAttempt as WebhookDeliveryAttempt,
     };
 }
+
 pub use common_enums::*;
 use common_utils::pii;
+#[cfg(all(feature = "v2", feature = "tokenization_v2"))]
+pub use common_utils::tokenization;
 use diesel::{deserialize::FromSqlRow, expression::AsExpression, sql_types::Jsonb};
 use router_derive::diesel_enum;
 use time::PrimitiveDateTime;
@@ -54,57 +58,7 @@ pub enum RoutingAlgorithmKind {
     VolumeSplit,
     Advanced,
     Dynamic,
-}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    serde::Deserialize,
-    serde::Serialize,
-    strum::Display,
-    strum::EnumString,
-)]
-#[diesel_enum(storage_type = "db_enum")]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum EventObjectType {
-    PaymentDetails,
-    RefundDetails,
-    DisputeDetails,
-    MandateDetails,
-    PayoutDetails,
-}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    serde::Deserialize,
-    serde::Serialize,
-    strum::Display,
-    strum::EnumString,
-)]
-#[diesel_enum(storage_type = "db_enum")]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ProcessTrackerStatus {
-    // Picked by the producer
-    Processing,
-    // State when the task is added
-    New,
-    // Send to retry
-    Pending,
-    // Picked by consumer
-    ProcessStarted,
-    // Finished by consumer
-    Finish,
-    // Review the task
-    Review,
+    ThreeDsDecisionRule,
 }
 
 // Refund
@@ -112,7 +66,6 @@ pub enum ProcessTrackerStatus {
     Clone,
     Copy,
     Debug,
-    Default,
     Eq,
     PartialEq,
     serde::Serialize,
@@ -125,7 +78,6 @@ pub enum ProcessTrackerStatus {
 #[serde(rename_all = "snake_case")]
 pub enum RefundType {
     InstantRefund,
-    #[default]
     RegularRefund,
     RetryRefund,
 }
@@ -284,6 +236,11 @@ pub enum DashboardMetadata {
     IsMultipleConfiguration,
     IsChangePasswordRequired,
     OnboardingSurvey,
+    ReconStatus,
+    #[cfg(feature = "v1")]
+    PaymentViews,
+    #[cfg(feature = "v1")]
+    PaymentAdvancedViews,
 }
 
 #[derive(

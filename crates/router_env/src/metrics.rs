@@ -6,12 +6,12 @@
 #[macro_export]
 macro_rules! global_meter {
     ($name:ident) => {
-        static $name: once_cell::sync::Lazy<$crate::opentelemetry::metrics::Meter> =
-            once_cell::sync::Lazy::new(|| $crate::opentelemetry::global::meter(stringify!($name)));
+        static $name: ::std::sync::LazyLock<$crate::opentelemetry::metrics::Meter> =
+            ::std::sync::LazyLock::new(|| $crate::opentelemetry::global::meter(stringify!($name)));
     };
     ($meter:ident, $name:literal) => {
-        static $meter: once_cell::sync::Lazy<$crate::opentelemetry::metrics::Meter> =
-            once_cell::sync::Lazy::new(|| $crate::opentelemetry::global::meter(stringify!($name)));
+        static $meter: ::std::sync::LazyLock<$crate::opentelemetry::metrics::Meter> =
+            ::std::sync::LazyLock::new(|| $crate::opentelemetry::global::meter(stringify!($name)));
     };
 }
 
@@ -23,18 +23,30 @@ macro_rules! global_meter {
 #[macro_export]
 macro_rules! counter_metric {
     ($name:ident, $meter:ident) => {
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Counter<u64>,
-        > = once_cell::sync::Lazy::new(|| $meter.u64_counter(stringify!($name)).build());
+        > = ::std::sync::LazyLock::new(|| $meter.u64_counter(stringify!($name)).build());
     };
     ($name:ident, $meter:ident, description:literal) => {
         #[doc = $description]
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Counter<u64>,
-        > = once_cell::sync::Lazy::new(|| {
+        > = ::std::sync::LazyLock::new(|| {
             $meter
                 .u64_counter(stringify!($name))
                 .with_description($description)
+                .build()
+        });
+    };
+    ($name:ident, $meter:ident, name: $metric_name:literal, description: $description:literal, unit: $unit:literal $(,)?) => {
+        #[doc = $description]
+        pub(crate) static $name: ::std::sync::LazyLock<
+            $crate::opentelemetry::metrics::Counter<u64>,
+        > = ::std::sync::LazyLock::new(|| {
+            $meter
+                .u64_counter($metric_name)
+                .with_description($description)
+                .with_unit($unit)
                 .build()
         });
     };
@@ -48,9 +60,9 @@ macro_rules! counter_metric {
 #[macro_export]
 macro_rules! histogram_metric_f64 {
     ($name:ident, $meter:ident) => {
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Histogram<f64>,
-        > = once_cell::sync::Lazy::new(|| {
+        > = ::std::sync::LazyLock::new(|| {
             $meter
                 .f64_histogram(stringify!($name))
                 .with_boundaries($crate::metrics::f64_histogram_buckets())
@@ -59,12 +71,25 @@ macro_rules! histogram_metric_f64 {
     };
     ($name:ident, $meter:ident, $description:literal) => {
         #[doc = $description]
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Histogram<f64>,
-        > = once_cell::sync::Lazy::new(|| {
+        > = ::std::sync::LazyLock::new(|| {
             $meter
                 .f64_histogram(stringify!($name))
                 .with_description($description)
+                .with_boundaries($crate::metrics::f64_histogram_buckets())
+                .build()
+        });
+    };
+    ($name:ident, $meter:ident, name: $metric_name:literal, description: $description:literal, unit: $unit:literal $(,)?) => {
+        #[doc = $description]
+        pub(crate) static $name: ::std::sync::LazyLock<
+            $crate::opentelemetry::metrics::Histogram<f64>,
+        > = ::std::sync::LazyLock::new(|| {
+            $meter
+                .f64_histogram($metric_name)
+                .with_description($description)
+                .with_unit($unit)
                 .with_boundaries($crate::metrics::f64_histogram_buckets())
                 .build()
         });
@@ -79,9 +104,9 @@ macro_rules! histogram_metric_f64 {
 #[macro_export]
 macro_rules! histogram_metric_u64 {
     ($name:ident, $meter:ident) => {
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Histogram<u64>,
-        > = once_cell::sync::Lazy::new(|| {
+        > = ::std::sync::LazyLock::new(|| {
             $meter
                 .u64_histogram(stringify!($name))
                 .with_boundaries($crate::metrics::f64_histogram_buckets())
@@ -90,9 +115,9 @@ macro_rules! histogram_metric_u64 {
     };
     ($name:ident, $meter:ident, $description:literal) => {
         #[doc = $description]
-        pub(crate) static $name: once_cell::sync::Lazy<
+        pub(crate) static $name: ::std::sync::LazyLock<
             $crate::opentelemetry::metrics::Histogram<u64>,
-        > = once_cell::sync::Lazy::new(|| {
+        > = ::std::sync::LazyLock::new(|| {
             $meter
                 .u64_histogram(stringify!($name))
                 .with_description($description)
@@ -110,13 +135,13 @@ macro_rules! histogram_metric_u64 {
 #[macro_export]
 macro_rules! gauge_metric {
     ($name:ident, $meter:ident) => {
-        pub(crate) static $name: once_cell::sync::Lazy<$crate::opentelemetry::metrics::Gauge<u64>> =
-            once_cell::sync::Lazy::new(|| $meter.u64_gauge(stringify!($name)).build());
+        pub(crate) static $name: ::std::sync::LazyLock<$crate::opentelemetry::metrics::Gauge<u64>> =
+            ::std::sync::LazyLock::new(|| $meter.u64_gauge(stringify!($name)).build());
     };
     ($name:ident, $meter:ident, description:literal) => {
         #[doc = $description]
-        pub(crate) static $name: once_cell::sync::Lazy<$crate::opentelemetry::metrics::Gauge<u64>> =
-            once_cell::sync::Lazy::new(|| {
+        pub(crate) static $name: ::std::sync::LazyLock<$crate::opentelemetry::metrics::Gauge<u64>> =
+            ::std::sync::LazyLock::new(|| {
                 $meter
                     .u64_gauge(stringify!($name))
                     .with_description($description)
@@ -139,12 +164,12 @@ mod helpers {
     /// Returns the buckets to be used for a f64 histogram
     #[inline(always)]
     pub fn f64_histogram_buckets() -> Vec<f64> {
-        let mut init = 0.01;
-        let mut buckets: [f64; 15] = [0.0; 15];
+        let mut init = 0.000_001;
+        let mut buckets: [f64; 30] = [0.0; 30];
 
         for bucket in &mut buckets {
-            init *= 2.0;
             *bucket = init;
+            init *= 2.0;
         }
 
         Vec::from(buckets)

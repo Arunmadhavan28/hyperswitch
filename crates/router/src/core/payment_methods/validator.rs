@@ -2,7 +2,7 @@ use api_models::{admin, payment_methods::PaymentMethodCollectLinkRequest};
 use common_utils::link_utils;
 use diesel_models::generic_link::PaymentMethodCollectLinkData;
 use error_stack::ResultExt;
-use masking::Secret;
+use hyperswitch_masking::Secret;
 
 use crate::{
     consts,
@@ -15,35 +15,32 @@ use crate::{
     utils,
 };
 
-#[cfg(all(feature = "v2", feature = "customer_v2"))]
+#[cfg(feature = "v2")]
 pub async fn validate_request_and_initiate_payment_method_collect_link(
     _state: &SessionState,
-    _merchant_account: &domain::MerchantAccount,
-    _key_store: &domain::MerchantKeyStore,
+    _platform: &domain::Platform,
     _req: &PaymentMethodCollectLinkRequest,
 ) -> RouterResult<PaymentMethodCollectLinkData> {
     todo!()
 }
 
-#[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
+#[cfg(feature = "v1")]
 pub async fn validate_request_and_initiate_payment_method_collect_link(
     state: &SessionState,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    platform: &domain::Platform,
     req: &PaymentMethodCollectLinkRequest,
 ) -> RouterResult<PaymentMethodCollectLinkData> {
     // Validate customer_id
     let db: &dyn StorageInterface = &*state.store;
     let customer_id = req.customer_id.clone();
-    let merchant_id = merchant_account.get_id().clone();
-    #[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
+    let merchant_id = platform.get_provider().get_account().get_id().clone();
+    #[cfg(feature = "v1")]
     match db
         .find_customer_by_customer_id_merchant_id(
-            &state.into(),
             &customer_id,
             &merchant_id,
-            key_store,
-            merchant_account.storage_scheme,
+            platform.get_provider().get_key_store(),
+            platform.get_provider().get_account().storage_scheme,
         )
         .await
     {
@@ -76,7 +73,9 @@ pub async fn validate_request_and_initiate_payment_method_collect_link(
     let default_config = &state.conf.generic_link.payment_method_collect;
 
     #[cfg(feature = "v1")]
-    let merchant_config = merchant_account
+    let merchant_config = platform
+        .get_processor()
+        .get_account()
         .pm_collect_link_config
         .as_ref()
         .map(|config| {
@@ -87,7 +86,7 @@ pub async fn validate_request_and_initiate_payment_method_collect_link(
         })
         .transpose()
         .change_context(errors::ApiErrorResponse::InvalidDataValue {
-            field_name: "pm_collect_link_config in merchant_account",
+            field_name: "pm_collect_link_config in merchant_account".into(),
         })?;
 
     #[cfg(feature = "v2")]
@@ -114,7 +113,7 @@ pub async fn validate_request_and_initiate_payment_method_collect_link(
     let domain = merchant_config
         .clone()
         .and_then(|c| c.config.domain_name)
-        .map(|domain| format!("https://{}", domain))
+        .map(|domain| format!("https://{domain}"))
         .unwrap_or(state.base_url.clone());
     let session_expiry = match req.session_expiry {
         Some(expiry) => expiry,

@@ -4,21 +4,21 @@ use api_models::{enums::FrmSuggestion, payments::PaymentsCreateIntentRequest};
 use async_trait::async_trait;
 use common_utils::{
     errors::CustomResult,
-    ext_traits::{AsyncExt, Encode, ValueExt},
-    types::keymanager::ToEncryptable,
+    ext_traits::Encode,
+    types::{authentication, keymanager::ToEncryptable},
 };
 use error_stack::ResultExt;
-use masking::PeekInterface;
+use hyperswitch_masking::PeekInterface;
 use router_env::{instrument, tracing};
 
 use super::{BoxedOperation, Domain, GetTracker, Operation, UpdateTracker, ValidateRequest};
 use crate::{
     core::{
+        configs::dimension_state,
         errors::{self, RouterResult, StorageErrorExt},
-        payments::{self, cards::create_encrypted_data, helpers, operations},
+        payments::{self, helpers, operations},
     },
     routes::{app::ReqState, SessionState},
-    services,
     types::{
         api,
         domain::{self, types as domain_types},
@@ -95,16 +95,24 @@ impl<F: Send + Clone + Sync>
         state: &'a SessionState,
         payment_id: &common_utils::id_type::GlobalPaymentId,
         request: &PaymentsCreateIntentRequest,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Platform,
         profile: &domain::Profile,
-        key_store: &domain::MerchantKeyStore,
         _header_payload: &hyperswitch_domain_models::payments::HeaderPayload,
-        platform_merchant_account: Option<&domain::MerchantAccount>,
     ) -> RouterResult<operations::GetTrackerResponse<payments::PaymentIntentData<F>>> {
         let db = &*state.store;
+        if let Some(routing_algorithm_id) = request.routing_algorithm_id.as_ref() {
+            helpers::validate_routing_id_with_profile_id(
+                db,
+                routing_algorithm_id,
+                profile.get_id(),
+            )
+            .await?;
+        }
         let key_manager_state = &state.into();
 
-        let storage_scheme = merchant_account.storage_scheme;
+        let cell_id = state.conf.cell_information.id.clone();
+
+        let storage_scheme = platform.get_processor().get_account().storage_scheme;
 
         let batch_encrypted_data = domain_types::crypto_operation(
             key_manager_state,
@@ -112,14 +120,15 @@ impl<F: Send + Clone + Sync>
             domain_types::CryptoOperation::BatchEncrypt(
                 hyperswitch_domain_models::payments::FromRequestEncryptablePaymentIntent::to_encryptable(
                     hyperswitch_domain_models::payments::FromRequestEncryptablePaymentIntent {
-                        shipping_address: request.shipping.clone().map(|address| address.encode_to_value()).transpose().change_context(errors::ApiErrorResponse::InternalServerError).attach_printable("Failed to encode shipping address")?.map(masking::Secret::new),
-                        billing_address: request.billing.clone().map(|address| address.encode_to_value()).transpose().change_context(errors::ApiErrorResponse::InternalServerError).attach_printable("Failed to encode billing address")?.map(masking::Secret::new),
+                        shipping_address: request.shipping.clone().map(|address| address.encode_to_value()).transpose().change_context(errors::ApiErrorResponse::InternalServerError).attach_printable("Failed to encode shipping address")?.map(hyperswitch_masking::Secret::new),
+                        billing_address: request.billing.clone().map(|address| address.encode_to_value()).transpose().change_context(errors::ApiErrorResponse::InternalServerError).attach_printable("Failed to encode billing address")?.map(hyperswitch_masking::Secret::new),
                         customer_details: None,
+                        recipient_details: request.recipient_details.clone().map(|recipient| recipient.encode_to_value()).transpose().change_context(errors::ApiErrorResponse::InternalServerError).attach_printable("Failed to encode recipient details")?.map(hyperswitch_masking::Secret::new),
                     },
                 ),
             ),
-            common_utils::types::keymanager::Identifier::Merchant(merchant_account.get_id().to_owned()),
-            key_store.key.peek(),
+            common_utils::types::keymanager::Identifier::Merchant(platform.get_processor().get_account().get_id().to_owned()),
+            platform.get_processor().get_key_store().key.peek(),
         )
         .await
         .and_then(|val| val.try_into_batchoperation())
@@ -134,19 +143,18 @@ impl<F: Send + Clone + Sync>
         let payment_intent_domain =
             hyperswitch_domain_models::payments::PaymentIntent::create_domain_model_from_request(
                 payment_id,
-                merchant_account,
+                platform,
                 profile,
                 request.clone(),
                 encrypted_data,
-                platform_merchant_account,
+                cell_id,
             )
             .await?;
 
         let payment_intent = db
             .insert_payment_intent(
-                key_manager_state,
                 payment_intent_domain,
-                key_store,
+                platform.get_processor().get_key_store(),
                 storage_scheme,
             )
             .await
@@ -158,10 +166,22 @@ impl<F: Send + Clone + Sync>
             })
             .attach_printable("failed while inserting new payment intent")?;
 
+        let client_secret = helpers::create_client_secret(
+            state,
+            platform.get_processor().get_account().get_id(),
+            authentication::ResourceId::Payment(payment_id.clone()),
+        )
+        .await
+        .change_context(errors::ApiErrorResponse::InternalServerError)
+        .attach_printable("Unable to create client secret")?;
+
         let payment_data = payments::PaymentIntentData {
             flow: PhantomData,
             payment_intent,
+            client_secret: Some(client_secret.secret),
             sessions_token: vec![],
+            vault_session_details: None,
+            connector_customer_id: None,
         };
 
         let get_trackers_response = operations::GetTrackerResponse { payment_data };
@@ -179,13 +199,11 @@ impl<F: Clone + Sync> UpdateTracker<F, payments::PaymentIntentData<F>, PaymentsC
         &'b self,
         _state: &'b SessionState,
         _req_state: ReqState,
+        _processor: &domain::Processor,
         payment_data: payments::PaymentIntentData<F>,
-        _customer: Option<domain::Customer>,
-        _storage_scheme: enums::MerchantStorageScheme,
-        _updated_customer: Option<storage::CustomerUpdate>,
-        _key_store: &domain::MerchantKeyStore,
         _frm_suggestion: Option<FrmSuggestion>,
         _header_payload: hyperswitch_domain_models::payments::HeaderPayload,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
     ) -> RouterResult<(
         PaymentsCreateIntentOperation<'b, F>,
         payments::PaymentIntentData<F>,
@@ -205,11 +223,11 @@ impl<F: Send + Clone>
     fn validate_request<'a, 'b>(
         &'b self,
         _request: &PaymentsCreateIntentRequest,
-        merchant_account: &'a domain::MerchantAccount,
+        platform: &'a domain::Platform,
     ) -> RouterResult<operations::ValidateResult> {
         Ok(operations::ValidateResult {
-            merchant_id: merchant_account.get_id().to_owned(),
-            storage_scheme: merchant_account.storage_scheme,
+            merchant_id: platform.get_processor().get_account().get_id().to_owned(),
+            storage_scheme: platform.get_processor().get_account().storage_scheme,
             requeue: false,
         })
     }
@@ -237,13 +255,7 @@ impl<F: Clone + Send + Sync> Domain<F, PaymentsCreateIntentRequest, payments::Pa
         if let Some(id) = payment_data.payment_intent.customer_id.clone() {
             state
                 .store
-                .find_customer_by_global_id(
-                    &state.into(),
-                    &id,
-                    &payment_data.payment_intent.merchant_id,
-                    merchant_key_store,
-                    storage_scheme,
-                )
+                .find_customer_by_global_id(&id, merchant_key_store, storage_scheme)
                 .await?;
         }
         Ok((Box::new(self), None))
@@ -255,8 +267,7 @@ impl<F: Clone + Send + Sync> Domain<F, PaymentsCreateIntentRequest, payments::Pa
         _state: &'a SessionState,
         _payment_data: &mut payments::PaymentIntentData<F>,
         _storage_scheme: enums::MerchantStorageScheme,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _customer: &Option<domain::Customer>,
+        _platform: &domain::Platform,
         _business_profile: &domain::Profile,
         _should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -270,12 +281,11 @@ impl<F: Clone + Send + Sync> Domain<F, PaymentsCreateIntentRequest, payments::Pa
     #[instrument(skip_all)]
     async fn perform_routing<'a>(
         &'a self,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Platform,
         business_profile: &domain::Profile,
         state: &SessionState,
         // TODO: do not take the whole payment data here
         payment_data: &mut payments::PaymentIntentData<F>,
-        mechant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorCallType, errors::ApiErrorResponse> {
         Ok(api::ConnectorCallType::Skip)
     }
@@ -284,9 +294,10 @@ impl<F: Clone + Send + Sync> Domain<F, PaymentsCreateIntentRequest, payments::Pa
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut payments::PaymentIntentData<F>,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }

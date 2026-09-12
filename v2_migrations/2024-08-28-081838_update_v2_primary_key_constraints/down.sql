@@ -38,8 +38,6 @@ UPDATE merchant_connector_account
 SET merchant_connector_id = id
 WHERE merchant_connector_id IS NULL;
 
-DROP INDEX IF EXISTS merchant_connector_account_profile_id_index;
-
 ------------------------ Customers -----------------------
 -- Run this query only when V1 is deprecated
 ALTER TABLE customers DROP CONSTRAINT customers_pkey;
@@ -65,3 +63,7 @@ ALTER TABLE payment_attempt ALTER COLUMN id DROP NOT NULL;
 ------------------------ Payment Methods -----------------------
 ALTER TABLE payment_methods DROP CONSTRAINT payment_methods_pkey;
 ALTER TABLE payment_methods ALTER COLUMN id DROP NOT NULL;
+
+------------------------ Refunds -----------------------
+ALTER TABLE refund DROP CONSTRAINT refund_pkey;
+ALTER TABLE refund ALTER COLUMN id DROP NOT NULL;

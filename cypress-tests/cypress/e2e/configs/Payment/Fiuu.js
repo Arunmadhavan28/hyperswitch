@@ -1,19 +1,34 @@
-import { customerAcceptance } from "./Commons";
+import {
+  blockedPaymentErrorBodyForBinUnavailable,
+  blockedPaymentErrorBodyForCardSubtype,
+  blockedPaymentErrorBodyForDebitCard,
+  blockedPaymentErrorBodyForIssuingCountry,
+  cardRequiredField,
+  customerAcceptance,
+} from "./Commons";
 
 const successfulNo3DSCardDetails = {
   card_number: "5105105105105100",
   card_exp_month: "12",
   card_exp_year: "2030",
   card_holder_name: "joseph Doe",
-  card_cvc: "123",
+  card_cvc: "444",
 };
 
 const successfulThreeDSTestCardDetails = {
-  card_number: "5105105105105100",
+  card_number: "4111111111111111",
   card_exp_month: "12",
   card_exp_year: "2031",
   card_holder_name: "joseph Doe",
   card_cvc: "444",
+};
+
+const failedNo3DSCardDetails = {
+  card_number: "4000000000000002",
+  card_exp_month: "01",
+  card_exp_year: "35",
+  card_holder_name: "joseph Doe",
+  card_cvc: "123",
 };
 
 const singleUseMandateData = {
@@ -21,7 +36,7 @@ const singleUseMandateData = {
   mandate_type: {
     single_use: {
       amount: 8000,
-      currency: "USD",
+      currency: "MYR",
     },
   },
 };
@@ -31,17 +46,116 @@ const multiUseMandateData = {
   mandate_type: {
     multi_use: {
       amount: 8000,
-      currency: "USD",
+      currency: "MYR",
     },
   },
 };
+
+const billingAddress = {
+  address: {
+    line1: "1467",
+    line2: "Harrison Street",
+    line3: "Harrison Street",
+    city: "San Fransico",
+    state: "California",
+    zip: "94122",
+    country: "MY",
+    first_name: "joseph",
+    last_name: "Doe",
+  },
+  email: "johndoe@gmail.com",
+};
+
+const requiredFields = {
+  payment_methods: [
+    {
+      payment_method: "card",
+      payment_method_types: [
+        {
+          payment_method_type: "credit",
+          card_networks: [
+            {
+              eligible_connectors: ["fiuu"],
+            },
+          ],
+          required_fields: cardRequiredField,
+        },
+      ],
+    },
+  ],
+};
+
+const MITErrorResponse = {
+  status: 200,
+  body: {
+    status: "failed",
+    error_code: "Token not found",
+    error_message: "Token not found",
+  },
+};
+
 export const connectorDetails = {
+  real_time_payment_pm: {
+    DuitNow: {
+      Configs: {
+        TRIGGER_SKIP: true, //Since fiuu follows a qr flow we are skipping the qr handling
+      },
+      Request: {
+        payment_method: "real_time_payment",
+        payment_method_type: "duit_now",
+        payment_method_data: {
+          real_time_payment: {
+            duit_now: {},
+          },
+        },
+        billing: billingAddress,
+        currency: "MYR",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_customer_action",
+          net_amount: 6000,
+          amount_received: null,
+          amount: 6000,
+        },
+      },
+    },
+  },
+  bank_redirect_pm: {
+    OnlineBankingFpx: {
+      Request: {
+        payment_method: "bank_redirect",
+        payment_method_type: "online_banking_fpx",
+        amount: 6000,
+        currency: "MYR",
+        payment_method_data: {
+          bank_redirect: {
+            online_banking_fpx: {
+              issuer: "affin_bank",
+            },
+          },
+        },
+        billing: billingAddress,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_customer_action",
+          net_amount: 6000,
+          amount_received: null,
+          amount: 6000,
+        },
+      },
+    },
+  },
   card_pm: {
     PaymentIntent: {
       Request: {
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -56,9 +170,10 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -73,9 +188,10 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -90,9 +206,10 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -107,9 +224,10 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -191,8 +309,9 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: singleUseMandateData,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -207,8 +326,9 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: singleUseMandateData,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -222,11 +342,9 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: singleUseMandateData,
       },
       Response: {
@@ -241,11 +359,9 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: singleUseMandateData,
       },
       Response: {
@@ -260,22 +376,9 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: multiUseMandateData,
       },
       Response: {
@@ -290,11 +393,9 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: multiUseMandateData,
       },
       Response: {
@@ -310,8 +411,9 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: multiUseMandateData,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -326,8 +428,9 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: multiUseMandateData,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -337,17 +440,44 @@ export const connectorDetails = {
       },
     },
     MITAutoCapture: {
-      Request: {},
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        currency: "MYR",
+        billing: billingAddress,
+      },
+      Response: MITErrorResponse,
+    },
+    MITAutoCaptureWithCustomerAcceptance: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        currency: "MYR",
+        billing: billingAddress,
+        customer_acceptance: {
+          acceptance_type: "offline",
+          accepted_at: "1963-05-03T04:07:52.723Z",
+          online: {
+            ip_address: "127.0.0.1",
+            user_agent: "amet irure esse",
+          },
+        },
+      },
       Response: {
         status: 200,
         body: {
           status: "failed",
-          error_code: "The currency not allow for the RecordType",
-          error_message: "The currency not allow for the RecordType",
+          error_code: "Token not found",
+          error_message: "Token not found",
         },
       },
     },
     MITWithoutBillingAddress: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         billing: null,
       },
@@ -361,23 +491,23 @@ export const connectorDetails = {
       },
     },
     MITManualCapture: {
-      Request: {},
-      Response: {
-        status: 200,
-        body: {
-          status: "failed",
-          error_code: "The currency not allow for the RecordType",
-          error_message: "The currency not allow for the RecordType",
-        },
+      Configs: {
+        TRIGGER_SKIP: true,
       },
+      Request: {
+        currency: "MYR",
+        billing: billingAddress,
+      },
+      Response: MITErrorResponse,
     },
     PaymentIntentOffSession: {
       Request: {
         amount: 6000,
         authentication_type: "no_three_ds",
-        currency: "USD",
+        currency: "MYR",
         customer_acceptance: null,
         setup_future_usage: "off_session",
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -391,24 +521,12 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: null,
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -422,24 +540,11 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
         },
-        currency: "USD",
+        currency: "MYR",
         setup_future_usage: "on_session",
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -453,24 +558,12 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         setup_future_usage: "on_session",
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -484,23 +577,12 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
+        currency: "MYR",
         setup_future_usage: "off_session",
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -514,28 +596,16 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
+        currency: "MYR",
         setup_future_usage: "off_session",
         customer_acceptance: customerAcceptance,
       },
       Response: {
         status: 200,
         body: {
-          status: "succeeded",
+          status: "requires_customer_action",
         },
       },
     },
@@ -544,20 +614,7 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
         setup_future_usage: "off_session",
         customer_acceptance: customerAcceptance,
@@ -572,50 +629,28 @@ export const connectorDetails = {
     SaveCardConfirmAutoCaptureOffSession: {
       Request: {
         setup_future_usage: "off_session",
+        billing: billingAddress,
       },
-      Response: {
-        status: 200,
-        body: {
-          status: "failed",
-          error_message: "The currency not allow for the RecordType",
-        },
-      },
+      Response: MITErrorResponse,
     },
     SaveCardConfirmManualCaptureOffSession: {
       Request: {
         setup_future_usage: "off_session",
+        billing: billingAddress,
       },
-      Response: {
-        status: 200,
-        body: {
-          status: "failed",
-          error_message: "The currency not allow for the RecordType",
-        },
-      },
+      Response: MITErrorResponse,
     },
     PaymentMethodIdMandateNo3DSManualCapture: {
       Request: {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: null,
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -629,25 +664,13 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: null,
         authentication_type: "three_ds",
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -661,24 +684,13 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulThreeDSTestCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billingAddress,
         },
+        currency: "MYR",
         mandate_data: null,
         authentication_type: "three_ds",
         customer_acceptance: customerAcceptance,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -688,6 +700,15 @@ export const connectorDetails = {
       },
     },
     PaymentConfirmWithShippingCost: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+        billing: billingAddress,
+      },
       Response: {
         status: 200,
         body: {
@@ -700,13 +721,17 @@ export const connectorDetails = {
       },
     },
     ZeroAuthMandate: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
+        currency: "MYR",
         mandate_data: singleUseMandateData,
+        billing: billingAddress,
       },
       Response: {
         status: 200,
@@ -720,19 +745,16 @@ export const connectorDetails = {
         setup_future_usage: "off_session",
         billing: null,
       },
-      Response: {
-        status: 200,
-        body: {
-          status: "failed",
-          error_message: "The currency not allow for the RecordType",
-        },
-      },
+      Response: MITErrorResponse,
     },
     ZeroAuthPaymentIntent: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         amount: 0,
         setup_future_usage: "off_session",
-        currency: "USD",
+        currency: "MYR",
       },
       Response: {
         status: 200,
@@ -750,6 +772,10 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
+        currency: "MYR",
+        billing: billingAddress,
+        mandate_data: null,
+        customer_acceptance: customerAcceptance,
       },
       Response: {
         status: 200,
@@ -758,6 +784,291 @@ export const connectorDetails = {
           setup_future_usage: "off_session",
         },
       },
+    },
+    PaymentIntentWithShippingCost: {
+      Request: {
+        currency: "MYR",
+        shipping_cost: 50,
+        billing: billingAddress,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+          shipping_cost: 50,
+          amount: 6000,
+        },
+      },
+    },
+    No3DSFailPayment: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: failedNo3DSCardDetails,
+        },
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+        billing: billingAddress,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "failed",
+          error_code: "05",
+          error_message: "Do not honor",
+          unified_code: "UE_9000",
+          unified_message: "Something went wrong",
+        },
+      },
+    },
+    PaymentWithoutBilling: {
+      Request: {
+        currency: "MYR",
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+        authentication_type: "no_three_ds",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    PaymentWithBilling: {
+      Request: {
+        currency: "MYR",
+        setup_future_usage: "on_session",
+        billing: {
+          address: {
+            line1: "1467",
+            line2: "CA",
+            line3: "Harrison Street",
+            city: "San Fransico",
+            state: "CA",
+            zip: "94122",
+            country: "MY",
+            first_name: "joseph",
+            last_name: "Doe",
+          },
+          phone: {
+            number: "9111222333",
+            country_code: "+91",
+          },
+        },
+        email: "hyperswitch.example@gmail.com",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    PaymentWithFullName: {
+      Request: {
+        currency: "MYR",
+        setup_future_usage: "on_session",
+        billing: {
+          address: {
+            first_name: "joseph",
+            last_name: "Doe",
+          },
+          phone: {
+            number: "9111222333",
+            country_code: "+91",
+          },
+        },
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    PaymentWithBillingEmail: {
+      Request: {
+        currency: "MYR",
+        setup_future_usage: "on_session",
+        email: "hyperswitch_sdk_demo_id1@gmail.com",
+        billing: {
+          address: {
+            first_name: "joseph",
+            last_name: "Doe",
+          },
+          phone: {
+            number: "9111222333",
+            country_code: "+91",
+          },
+          email: "hyperswitch.example@gmail.com",
+        },
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    ManualRetryPaymentDisabled: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        currency: "USD",
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+      },
+      Response: {
+        status: 400,
+        body: {
+          type: "invalid_request",
+          message:
+            "You cannot confirm this payment because it has status failed, you can enable `manual_retry` in profile to try this payment again",
+          code: "IR_16",
+        },
+      },
+    },
+    ManualRetryPaymentEnabled: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        currency: "USD",
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+          payment_method: "card",
+          attempt_count: 2,
+        },
+      },
+    },
+    ManualRetryPaymentCutoffExpired: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        currency: "USD",
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+      },
+      Response: {
+        status: 400,
+        body: {
+          type: "invalid_request",
+          message:
+            "You cannot confirm this payment using `manual_retry` because the allowed duration has expired",
+          code: "IR_16",
+        },
+      },
+    },
+  },
+  pm_list: {
+    PmListResponse: {
+      PmListNull: {
+        payment_methods: [],
+      },
+      pmListDynamicFieldWithoutBilling: requiredFields,
+      pmListDynamicFieldWithBilling: requiredFields,
+      pmListDynamicFieldWithNames: requiredFields,
+      pmListDynamicFieldWithEmail: requiredFields,
+    },
+  },
+  webhook: {
+    TransactionIdConfig: {
+      // Defines how to locate and parse the payment reference ID from connector-specific webhook payloads
+      path: "orderid",
+      // Type of payment reference ID
+      type: "string",
+      // Fiuu webhook handler uses PaymentAttemptId for lookup, not ConnectorTransactionId
+      source: "paymentAttemptID",
+    },
+    RefundIdConfig: {
+      // Fiuu refund webhooks carry the connector refund ID in the RefundID field
+      path: "RefundID",
+      type: "string",
+    },
+  },
+  payment_method_blocking_pm: {
+    BlockIssuingCountry: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: {
+            card_number: "4000000000000002",
+            card_exp_month: "03",
+            card_exp_year: "30",
+            card_holder_name: "joseph Doeeee",
+            card_cvc: "737",
+            card_network: "Visa",
+          },
+        },
+        billing: billingAddress,
+        currency: "MYR",
+      },
+      Response: blockedPaymentErrorBodyForIssuingCountry,
+    },
+    BlockCardType: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: {
+            card_number: "4111111111111111",
+            card_exp_month: "03",
+            card_exp_year: "30",
+            card_holder_name: "joseph Doeeee",
+            card_cvc: "737",
+            card_network: "Visa",
+          },
+        },
+        billing: billingAddress,
+        currency: "MYR",
+      },
+      Response: blockedPaymentErrorBodyForDebitCard,
+    },
+    BlockCardSubtype: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: {
+            card_number: "378282246310005",
+            card_exp_month: "03",
+            card_exp_year: "30",
+            card_holder_name: "joseph Doeeee",
+            card_cvc: "737",
+            card_network: "Visa",
+          },
+        },
+        currency: "MYR",
+        billing: billingAddress,
+      },
+      Response: blockedPaymentErrorBodyForCardSubtype,
+    },
+    BlockIfBinInfoUnavailable: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: {
+            card_number: "6304000000000000",
+            card_exp_month: "03",
+            card_exp_year: "30",
+            card_holder_name: "joseph Doeeee",
+            card_cvc: "737",
+            card_network: "Visa",
+          },
+        },
+        billing: billingAddress,
+        currency: "MYR",
+      },
+      Response: blockedPaymentErrorBodyForBinUnavailable,
     },
   },
 };

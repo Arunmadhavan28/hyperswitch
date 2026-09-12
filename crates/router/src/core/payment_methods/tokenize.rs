@@ -8,14 +8,16 @@ use common_utils::{
 };
 use error_stack::{report, ResultExt};
 use hyperswitch_domain_models::router_request_types as domain_request_types;
-use masking::{ExposeInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, Secret};
 use router_env::logger;
 
-use super::migration;
 use crate::{
-    core::payment_methods::{
-        cards::{add_card_to_hs_locker, create_encrypted_data, tokenize_card_flow},
-        network_tokenization, transformers as pm_transformers,
+    core::{
+        payment_methods::{
+            cards::{add_card_to_vault, tokenize_card_flow},
+            network_tokenization, transformers as pm_transformers,
+        },
+        utils::create_encrypted_data,
     },
     errors::{self, RouterResult},
     services,
@@ -97,21 +99,21 @@ pub fn get_tokenize_card_form_records(
 pub async fn tokenize_cards(
     state: &SessionState,
     records: Vec<payment_methods_api::CardNetworkTokenizeRequest>,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    provider: &domain::Provider,
+    initiator: Option<&domain::Initiator>,
 ) -> errors::RouterResponse<Vec<payment_methods_api::CardNetworkTokenizeResponse>> {
     use futures::stream::StreamExt;
 
     // Process all records in parallel
-    let responses = futures::stream::iter(records.into_iter())
+    let responses = futures::stream::iter(records)
         .map(|record| async move {
             let tokenize_request = record.data.clone();
             let customer = record.customer.clone();
             Box::pin(tokenize_card_flow(
                 state,
                 domain::CardNetworkTokenizeRequest::foreign_from(record),
-                merchant_account,
-                key_store,
+                provider,
+                initiator,
             ))
             .await
             .unwrap_or_else(|e| {
@@ -196,8 +198,7 @@ pub trait TransitionTo<S: State> {}
 pub trait NetworkTokenizationProcess<'a, D> {
     fn new(
         state: &'a SessionState,
-        key_store: &'a domain::MerchantKeyStore,
-        merchant_account: &'a domain::MerchantAccount,
+        provider: &'a domain::Provider,
         data: &'a D,
         customer: &'a domain_request_types::CustomerDetails,
     ) -> Self;
@@ -247,8 +248,7 @@ where
 {
     fn new(
         state: &'a SessionState,
-        key_store: &'a domain::MerchantKeyStore,
-        merchant_account: &'a domain::MerchantAccount,
+        provider: &'a domain::Provider,
         data: &'a D,
         customer: &'a domain_request_types::CustomerDetails,
     ) -> Self {
@@ -256,8 +256,8 @@ where
             data,
             customer,
             state,
-            merchant_account,
-            key_store,
+            merchant_account: provider.get_account(),
+            key_store: provider.get_key_store(),
         }
     }
     async fn encrypt_card(
@@ -273,15 +273,29 @@ where
             nick_name: card_details.nick_name.clone(),
             card_holder_name: card_details.card_holder_name.clone(),
             issuer_country: card_details.card_issuing_country.clone(),
+            issuer_country_code: card_details.card_issuing_country_code.clone(),
             card_issuer: card_details.card_issuer.clone(),
             card_network: card_details.card_network.clone(),
             card_type: card_details.card_type.clone(),
+            card_subtype: card_details.card_subtype.clone(),
+            card_segment_type: card_details.card_segment_type,
+            funding_source: card_details.funding_source,
             saved_to_locker,
+            co_badged_card_data: card_details
+                .co_badged_card_data
+                .as_ref()
+                .map(|data| data.into()),
         });
-        create_encrypted_data(&self.state.into(), self.key_store, pm_data)
-            .await
-            .inspect_err(|err| logger::info!("Error encrypting payment method data: {:?}", err))
-            .change_context(errors::ApiErrorResponse::InternalServerError)
+
+        create_encrypted_data(
+            &self.state.into(),
+            self.key_store,
+            pm_data,
+            common_utils::type_name!(diesel_models::payment_method::PaymentMethod),
+        )
+        .await
+        .inspect_err(|err| logger::info!("Error encrypting payment method data: {:?}", err))
+        .change_context(errors::ApiErrorResponse::InternalServerError)
     }
     async fn encrypt_network_token(
         &self,
@@ -298,15 +312,25 @@ where
             nick_name: card_details.nick_name.clone(),
             card_holder_name: card_details.card_holder_name.clone(),
             issuer_country: card_details.card_issuing_country.clone(),
+            issuer_country_code: card_details.card_issuing_country_code.clone(),
             card_issuer: card_details.card_issuer.clone(),
             card_network: card_details.card_network.clone(),
             card_type: card_details.card_type.clone(),
+            card_subtype: card_details.card_subtype.clone(),
+            card_segment_type: card_details.card_segment_type,
+            funding_source: card_details.funding_source,
             saved_to_locker,
+            co_badged_card_data: None,
         });
-        create_encrypted_data(&self.state.into(), self.key_store, token_data)
-            .await
-            .inspect_err(|err| logger::info!("Error encrypting network token data: {:?}", err))
-            .change_context(errors::ApiErrorResponse::InternalServerError)
+        create_encrypted_data(
+            &self.state.into(),
+            self.key_store,
+            token_data,
+            common_utils::type_name!(diesel_models::payment_method::PaymentMethod),
+        )
+        .await
+        .inspect_err(|err| logger::info!("Error encrypting network token data: {:?}", err))
+        .change_context(errors::ApiErrorResponse::InternalServerError)
     }
     async fn fetch_bin_details_and_validate_card_network(
         &self,
@@ -374,8 +398,7 @@ where
                 } else {
                     Err(report!(errors::ApiErrorResponse::NotSupported {
                         message: format!(
-                            "Network tokenization for {} is not supported",
-                            card_network
+                            "Network tokenization for {card_network} is not supported",
                         )
                     }))
                 }
@@ -408,15 +431,10 @@ where
                 ttl: self.state.conf.locker.ttl_for_storage_in_secs,
             });
 
-        let stored_resp = add_card_to_hs_locker(
-            self.state,
-            &locker_req,
-            customer_id,
-            api_enums::LockerChoice::HyperswitchCardVault,
-        )
-        .await
-        .inspect_err(|err| logger::info!("Error adding card in locker: {:?}", err))
-        .change_context(errors::ApiErrorResponse::InternalServerError)?;
+        let stored_resp = add_card_to_vault(self.state, &locker_req, customer_id)
+            .await
+            .inspect_err(|err| logger::info!("Error adding card in locker: {:?}", err))
+            .change_context(errors::ApiErrorResponse::InternalServerError)?;
 
         Ok(stored_resp)
     }

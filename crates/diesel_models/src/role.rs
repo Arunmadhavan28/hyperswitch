@@ -5,11 +5,12 @@ use time::PrimitiveDateTime;
 use crate::{enums, schema::roles};
 
 #[derive(Clone, Debug, Identifiable, Queryable, Selectable)]
+#[cfg_attr(feature = "deja", derive(serde::Serialize, serde::Deserialize))]
 #[diesel(table_name = roles, primary_key(role_id), check_for_backend(diesel::pg::Pg))]
 pub struct Role {
     pub role_name: String,
     pub role_id: String,
-    pub merchant_id: id_type::MerchantId,
+    pub merchant_id: Option<id_type::MerchantId>,
     pub org_id: id_type::OrganizationId,
     #[diesel(deserialize_as = super::DieselArray<enums::PermissionGroup>)]
     pub groups: Vec<enums::PermissionGroup>,
@@ -21,6 +22,7 @@ pub struct Role {
     pub entity_type: enums::EntityType,
     pub profile_id: Option<id_type::ProfileId>,
     pub tenant_id: id_type::TenantId,
+    pub merchant_product_type: Option<enums::MerchantProductType>,
 }
 
 #[derive(router_derive::Setter, Clone, Debug, Insertable, router_derive::DebugAsDisplay)]
@@ -28,7 +30,7 @@ pub struct Role {
 pub struct RoleNew {
     pub role_name: String,
     pub role_id: String,
-    pub merchant_id: id_type::MerchantId,
+    pub merchant_id: Option<id_type::MerchantId>,
     pub org_id: id_type::OrganizationId,
     #[diesel(deserialize_as = super::DieselArray<enums::PermissionGroup>)]
     pub groups: Vec<enums::PermissionGroup>,
@@ -40,6 +42,7 @@ pub struct RoleNew {
     pub entity_type: enums::EntityType,
     pub profile_id: Option<id_type::ProfileId>,
     pub tenant_id: id_type::TenantId,
+    pub merchant_product_type: Option<enums::MerchantProductType>,
 }
 
 #[derive(Clone, Debug, AsChangeset, router_derive::DebugAsDisplay)]

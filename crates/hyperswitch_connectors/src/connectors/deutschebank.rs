@@ -1,8 +1,7 @@
 pub mod transformers;
 
-use std::time::SystemTime;
+use std::sync::LazyLock;
 
-use actix_web::http::header::Date;
 use base64::Engine;
 use common_enums::enums;
 use common_utils::{
@@ -48,9 +47,7 @@ use hyperswitch_interfaces::{
     types::{self, Response},
     webhooks,
 };
-use lazy_static::lazy_static;
-use masking::{ExposeInterface, Mask, Secret};
-use rand::distributions::{Alphanumeric, DistString};
+use hyperswitch_masking::{ExposeInterface, Mask, Secret};
 use ring::hmac;
 use transformers as deutschebank;
 
@@ -104,7 +101,8 @@ where
         &self,
         req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let access_token = req
             .access_token
             .clone()
@@ -145,7 +143,8 @@ impl ConnectorCommon for Deutschebank {
     fn get_auth_header(
         &self,
         auth_type: &ConnectorAuthType,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let auth = deutschebank::DeutschebankAuthType::try_from(auth_type)
             .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
         Ok(vec![(
@@ -174,23 +173,16 @@ impl ConnectorCommon for Deutschebank {
             reason: Some(response.message),
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
 
-impl ConnectorValidation for Deutschebank {
-    fn validate_mandate_payment(
-        &self,
-        pm_type: Option<enums::PaymentMethodType>,
-        pm_data: hyperswitch_domain_models::payment_method_data::PaymentMethodData,
-    ) -> CustomResult<(), errors::ConnectorError> {
-        let mandate_supported_pmd =
-            std::collections::HashSet::from([utils::PaymentMethodDataType::SepaBankDebit]);
-        utils::is_mandate_supported(pm_data, pm_type, mandate_supported_pmd, self.id())
-    }
-}
+impl ConnectorValidation for Deutschebank {}
 
 impl ConnectorIntegration<Session, PaymentsSessionData, PaymentsResponseData> for Deutschebank {
     //TODO: implement sessions flow
@@ -221,8 +213,9 @@ impl ConnectorIntegration<AccessTokenAuth, AccessTokenRequestData, AccessToken> 
     ) -> CustomResult<Option<Request>, errors::ConnectorError> {
         let auth = deutschebank::DeutschebankAuthType::try_from(&req.connector_auth_type)?;
         let client_id = auth.client_id.expose();
-        let date = Date(SystemTime::now().into()).to_string();
-        let random_string = Alphanumeric.sample_string(&mut rand::thread_rng(), 50);
+        let date = common_utils::date_time::now_rfc7231_http_date()
+            .change_context(errors::ConnectorError::RequestEncodingFailed)?;
+        let random_string = common_utils::generate_random_alphanumeric_string(50);
 
         let string_to_sign = client_id.clone() + &date + &random_string;
         let key = hmac::Key::new(hmac::HMAC_SHA256, auth.client_key.expose().as_bytes());
@@ -306,8 +299,11 @@ impl ConnectorIntegration<AccessTokenAuth, AccessTokenRequestData, AccessToken> 
                 reason: Some(response.message),
                 attempt_status: None,
                 connector_transaction_id: None,
-                issuer_error_code: None,
-                issuer_error_message: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             }),
             deutschebank::DeutschebankError::AccessTokenErrorResponse(response) => {
                 Ok(ErrorResponse {
@@ -317,8 +313,11 @@ impl ConnectorIntegration<AccessTokenAuth, AccessTokenRequestData, AccessToken> 
                     reason: Some(response.description),
                     attempt_status: None,
                     connector_transaction_id: None,
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 })
             }
         }
@@ -330,7 +329,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -474,7 +474,8 @@ impl ConnectorIntegration<CompleteAuthorize, CompleteAuthorizeData, PaymentsResp
         &self,
         req: &PaymentsCompleteAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -578,7 +579,8 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Deu
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -650,7 +652,8 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         &self,
         req: &PaymentsCaptureRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -741,7 +744,8 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for De
         &self,
         req: &PaymentsCancelRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -822,7 +826,8 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Deutsch
         &self,
         req: &RefundsRouterData<Execute>,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -913,7 +918,8 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Deutscheb
         &self,
         req: &RefundSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -988,6 +994,7 @@ impl webhooks::IncomingWebhook for Deutschebank {
     fn get_webhook_event_type(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
@@ -995,13 +1002,14 @@ impl webhooks::IncomingWebhook for Deutschebank {
     fn get_webhook_resource_object(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
 }
 
-lazy_static! {
-    static ref DEUTSCHEBANK_SUPPORTED_PAYMENT_METHODS: SupportedPaymentMethods = {
+static DEUTSCHEBANK_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(|| {
         let supported_capture_methods = vec![
             enums::CaptureMethod::Automatic,
             enums::CaptureMethod::Manual,
@@ -1018,18 +1026,18 @@ lazy_static! {
         deutschebank_supported_payment_methods.add(
             enums::PaymentMethod::BankDebit,
             enums::PaymentMethodType::Sepa,
-            PaymentMethodDetails{
+            PaymentMethodDetails {
                 mandates: enums::FeatureStatus::Supported,
                 refunds: enums::FeatureStatus::Supported,
                 supported_capture_methods: supported_capture_methods.clone(),
                 specific_features: None,
-            }
+            },
         );
 
         deutschebank_supported_payment_methods.add(
             enums::PaymentMethod::Card,
             enums::PaymentMethodType::Credit,
-            PaymentMethodDetails{
+            PaymentMethodDetails {
                 mandates: enums::FeatureStatus::NotSupported,
                 refunds: enums::FeatureStatus::Supported,
                 supported_capture_methods: supported_capture_methods.clone(),
@@ -1042,13 +1050,13 @@ lazy_static! {
                         }
                     }),
                 ),
-            }
+            },
         );
 
         deutschebank_supported_payment_methods.add(
             enums::PaymentMethod::Card,
             enums::PaymentMethodType::Debit,
-            PaymentMethodDetails{
+            PaymentMethodDetails {
                 mandates: enums::FeatureStatus::NotSupported,
                 refunds: enums::FeatureStatus::Supported,
                 supported_capture_methods: supported_capture_methods.clone(),
@@ -1061,45 +1069,25 @@ lazy_static! {
                         }
                     }),
                 ),
-            }
-        );
-
-        deutschebank_supported_payment_methods.add(
-            enums::PaymentMethod::Card,
-            enums::PaymentMethodType::Debit,
-            PaymentMethodDetails{
-                mandates: enums::FeatureStatus::NotSupported,
-                refunds: enums::FeatureStatus::Supported,
-                supported_capture_methods: supported_capture_methods.clone(),
-                specific_features: Some(
-                    api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
-                        api_models::feature_matrix::CardSpecificFeatures {
-                            three_ds: common_enums::FeatureStatus::Supported,
-                            no_three_ds: common_enums::FeatureStatus::NotSupported,
-                            supported_card_networks: supported_card_network.clone(),
-                        }
-                    }),
-                ),
-            }
+            },
         );
 
         deutschebank_supported_payment_methods
-    };
+    });
 
-    static ref DEUTSCHEBANK_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
-        display_name: "Deutsche Bank",
-        description:
-            "Deutsche Bank is a German multinational investment bank and financial services company ",
-        connector_type: enums::PaymentConnectorCategory::BankAcquirer,
-    };
+static DEUTSCHEBANK_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+    display_name: "Deutsche Bank",
+    description:
+        "Deutsche Bank is a German multinational investment bank and financial services company ",
+    connector_type: enums::HyperswitchConnectorCategory::BankAcquirer,
+    integration_status: enums::ConnectorIntegrationStatus::Sandbox,
+};
 
-    static ref DEUTSCHEBANK_SUPPORTED_WEBHOOK_FLOWS: Vec<enums::EventClass> = Vec::new();
-
-}
+static DEUTSCHEBANK_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 0] = [];
 
 impl ConnectorSpecifications for Deutschebank {
     fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
-        Some(&*DEUTSCHEBANK_CONNECTOR_INFO)
+        Some(&DEUTSCHEBANK_CONNECTOR_INFO)
     }
 
     fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
@@ -1107,6 +1095,6 @@ impl ConnectorSpecifications for Deutschebank {
     }
 
     fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
-        Some(&*DEUTSCHEBANK_SUPPORTED_WEBHOOK_FLOWS)
+        Some(&DEUTSCHEBANK_SUPPORTED_WEBHOOK_FLOWS)
     }
 }

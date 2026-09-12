@@ -12,7 +12,7 @@ pub trait ApiEventMetric {
 #[serde(tag = "flow_type", rename_all = "snake_case")]
 pub enum ApiEventsType {
     Payout {
-        payout_id: String,
+        payout_id: id_type::PayoutId,
     },
     #[cfg(feature = "v1")]
     Payment {
@@ -29,7 +29,7 @@ pub enum ApiEventsType {
     },
     #[cfg(feature = "v2")]
     Refund {
-        payment_id: id_type::GlobalPaymentId,
+        payment_id: Option<id_type::GlobalPaymentId>,
         refund_id: id_type::GlobalRefundId,
     },
     #[cfg(feature = "v1")]
@@ -44,13 +44,13 @@ pub enum ApiEventsType {
         payment_method_type: Option<common_enums::PaymentMethod>,
         payment_method_subtype: Option<common_enums::PaymentMethodType>,
     },
-    #[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+    #[cfg(feature = "v2")]
     PaymentMethodCreate,
-    #[cfg(all(feature = "v2", feature = "customer_v2"))]
+    #[cfg(feature = "v2")]
     Customer {
         customer_id: Option<id_type::GlobalCustomerId>,
     },
-    #[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
+    #[cfg(feature = "v1")]
     Customer {
         customer_id: id_type::CustomerId,
     },
@@ -74,13 +74,21 @@ pub enum ApiEventsType {
     Webhooks {
         connector: String,
         payment_id: Option<id_type::PaymentId>,
+        refund_id: Option<String>,
+    },
+    #[cfg(feature = "v1")]
+    NetworkTokenWebhook {
+        payment_method_id: Option<String>,
     },
     #[cfg(feature = "v2")]
     Webhooks {
         connector: id_type::MerchantConnectorAccountId,
         payment_id: Option<id_type::GlobalPaymentId>,
+        refund_id: Option<id_type::GlobalRefundId>,
     },
     Routing,
+    Subscription,
+    Invoice,
     ResourceListAPI,
     #[cfg(feature = "v1")]
     PaymentRedirectionResponse {
@@ -99,7 +107,9 @@ pub enum ApiEventsType {
     ApplePayCertificatesMigration,
     FraudCheck,
     Recon,
-    ExternalServiceAuth,
+    ExternalServiceAuth {
+        service: String,
+    },
     Dispute {
         dispute_id: String,
     },
@@ -121,6 +131,57 @@ pub enum ApiEventsType {
     PaymentMethodSession {
         payment_method_session_id: id_type::GlobalPaymentMethodSessionId,
     },
+    #[cfg(feature = "v2")]
+    Token {
+        token_id: Option<id_type::GlobalTokenId>,
+    },
+    ProcessTracker,
+    Authentication {
+        authentication_id: id_type::AuthenticationId,
+    },
+    ProfileAcquirer {
+        profile_acquirer_id: id_type::ProfileAcquirerId,
+    },
+    ThreeDsDecisionRule,
+    Oidc,
+    CardIssuers,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "api_flow", rename_all = "snake_case")]
+pub enum ConnectorEventsType {
+    Payout {
+        payout_id: String,
+    },
+    Payment {
+        payment_id: String,
+    },
+    Refund {
+        payment_id: String,
+        refund_id: String,
+    },
+    Dispute {
+        dispute_id: String,
+    },
+}
+
+impl ConnectorEventsType {
+    pub fn new(
+        payment_id: String,
+        refund_id: Option<String>,
+        payout_id: Option<String>,
+        dispute_id: Option<String>,
+    ) -> Self {
+        match (refund_id, payout_id, dispute_id) {
+            (Some(refund_id), _, _) => Self::Refund {
+                payment_id,
+                refund_id,
+            },
+            (_, Some(payout_id), _) => Self::Payout { payout_id },
+            (_, _, Some(dispute_id)) => Self::Dispute { dispute_id },
+            _ => Self::Payment { payment_id },
+        }
+    }
 }
 
 impl ApiEventMetric for serde_json::Value {}
@@ -131,6 +192,15 @@ impl ApiEventMetric for id_type::PaymentId {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::Payment {
             payment_id: self.clone(),
+        })
+    }
+}
+
+#[cfg(feature = "v1")]
+impl ApiEventMetric for id_type::PayoutId {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Payout {
+            payout_id: self.clone(),
         })
     }
 }

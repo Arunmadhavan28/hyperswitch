@@ -22,7 +22,7 @@ pub trait FraudCheckOperation<F, D>: Send + std::fmt::Debug {
         Err(report!(errors::ApiErrorResponse::InternalServerError))
             .attach_printable_lazy(|| format!("get tracker interface not found for {self:?}"))
     }
-    fn to_domain(&self) -> RouterResult<&(dyn Domain<F, D>)> {
+    fn to_domain(&self) -> RouterResult<&dyn Domain<F, D>> {
         Err(report!(errors::ApiErrorResponse::InternalServerError))
             .attach_printable_lazy(|| format!("domain interface not found for {self:?}"))
     }
@@ -51,9 +51,7 @@ pub trait Domain<F, D>: Send + Sync {
         req_state: ReqState,
         payment_data: &mut D,
         frm_data: &mut FrmData,
-        merchant_account: &domain::MerchantAccount,
-        customer: &Option<domain::Customer>,
-        key_store: domain::MerchantKeyStore,
+        platform: &domain::Platform,
     ) -> RouterResult<Option<FrmRouterData>>
     where
         F: Send + Clone;
@@ -63,9 +61,7 @@ pub trait Domain<F, D>: Send + Sync {
         state: &'a SessionState,
         payment_data: &mut D,
         frm_data: &mut FrmData,
-        merchant_account: &domain::MerchantAccount,
-        customer: &Option<domain::Customer>,
-        key_store: domain::MerchantKeyStore,
+        platform: &domain::Platform,
     ) -> RouterResult<FrmRouterData>
     where
         F: Send + Clone;
@@ -78,14 +74,11 @@ pub trait Domain<F, D>: Send + Sync {
         _state: &SessionState,
         _req_state: ReqState,
         frm_data: &mut FrmData,
-        _merchant_account: &domain::MerchantAccount,
+        _platform: &domain::Platform,
         _frm_configs: FrmConfigsObject,
         _frm_suggestion: &mut Option<FrmSuggestion>,
-        _key_store: domain::MerchantKeyStore,
         _payment_data: &mut D,
-        _customer: &Option<domain::Customer>,
         _should_continue_capture: &mut bool,
-        _platform_merchant_account: Option<&domain::MerchantAccount>,
     ) -> RouterResult<Option<FrmData>>
     where
         F: Send + Clone,

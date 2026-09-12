@@ -1,4 +1,7 @@
 pub mod transformers;
+
+use std::sync::LazyLock;
+
 use base64::Engine;
 use common_enums::enums;
 use common_utils::{
@@ -9,7 +12,7 @@ use common_utils::{
 };
 use error_stack::ResultExt;
 use hyperswitch_domain_models::{
-    api::ApplicationResponse,
+    api::WebhookResponse,
     router_data::{AccessToken, ErrorResponse, RouterData},
     router_flow_types::{
         access_token_auth::AccessTokenAuth,
@@ -21,7 +24,10 @@ use hyperswitch_domain_models::{
         PaymentsCancelData, PaymentsCaptureData, PaymentsSessionData, PaymentsSyncData,
         RefundsData, SetupMandateRequestData,
     },
-    router_response_types::{PaymentsResponseData, RefundsResponseData},
+    router_response_types::{
+        ConnectorInfo, PaymentMethodDetails, PaymentsResponseData, RefundsResponseData,
+        SupportedPaymentMethods, SupportedPaymentMethodsExt,
+    },
     types::{PaymentsAuthorizeRouterData, PaymentsSyncRouterData},
 };
 use hyperswitch_interfaces::{
@@ -30,12 +36,13 @@ use hyperswitch_interfaces::{
         ConnectorValidation,
     },
     configs::Connectors,
+    consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     errors,
     events::connector_api_logs::ConnectorEvent,
     types::{PaymentsAuthorizeType, Response},
     webhooks::{self, IncomingWebhookFlowError},
 };
-use masking::{Mask, PeekInterface, Secret};
+use hyperswitch_masking::{Mask, PeekInterface, Secret};
 use transformers as cashtocode;
 
 use crate::{constants::headers, types::ResponseRouterData, utils};
@@ -69,11 +76,11 @@ impl api::RefundSync for Cashtocode {}
 fn get_b64_auth_cashtocode(
     payment_method_type: Option<enums::PaymentMethodType>,
     auth_type: &transformers::CashtocodeAuth,
-) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError> {
     fn construct_basic_auth(
         username: Option<Secret<String>>,
         password: Option<Secret<String>>,
-    ) -> Result<masking::Maskable<String>, errors::ConnectorError> {
+    ) -> Result<hyperswitch_masking::Maskable<String>, errors::ConnectorError> {
         let username = username.ok_or(errors::ConnectorError::FailedToObtainAuthType)?;
         let password = password.ok_or(errors::ConnectorError::FailedToObtainAuthType)?;
         Ok(format!(
@@ -131,45 +138,59 @@ impl ConnectorCommon for Cashtocode {
         res: Response,
         event_builder: Option<&mut ConnectorEvent>,
     ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
-        let response: cashtocode::CashtocodeErrorResponse = res
-            .response
-            .parse_struct("CashtocodeErrorResponse")
-            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        if res.response.is_empty() {
+            return Ok(ErrorResponse {
+                status_code: res.status_code,
+                code: NO_ERROR_CODE.to_string(),
+                message: NO_ERROR_MESSAGE.to_string(),
+                reason: None,
+                attempt_status: None,
+                connector_transaction_id: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
+            });
+        }
 
-        event_builder.map(|i| i.set_error_response_body(&response));
-        router_env::logger::info!(connector_response=?response);
+        let response: Result<cashtocode::CashtocodeErrorResponse, _> =
+            res.response.parse_struct("CashtocodeErrorResponse");
 
-        Ok(ErrorResponse {
-            status_code: res.status_code,
-            code: response.error.to_string(),
-            message: response.error_description.clone(),
-            reason: Some(response.error_description),
-            attempt_status: None,
-            connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
-        })
-    }
-}
+        match response {
+            Ok(response) => {
+                event_builder.map(|i| i.set_error_response_body(&response));
+                router_env::logger::info!(connector_response=?response);
 
-impl ConnectorValidation for Cashtocode {
-    fn validate_connector_against_payment_request(
-        &self,
-        capture_method: Option<enums::CaptureMethod>,
-        _payment_method: enums::PaymentMethod,
-        _pmt: Option<enums::PaymentMethodType>,
-    ) -> CustomResult<(), errors::ConnectorError> {
-        let capture_method = capture_method.unwrap_or_default();
-        match capture_method {
-            enums::CaptureMethod::Automatic
-            | enums::CaptureMethod::Manual
-            | enums::CaptureMethod::SequentialAutomatic => Ok(()),
-            enums::CaptureMethod::ManualMultiple | enums::CaptureMethod::Scheduled => Err(
-                utils::construct_not_supported_error_report(capture_method, self.id()),
-            ),
+                Ok(ErrorResponse {
+                    status_code: res.status_code,
+                    code: response.error.to_string(),
+                    message: response.error_description.clone(),
+                    reason: Some(response.error_description),
+                    attempt_status: None,
+                    connector_transaction_id: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
+                })
+            }
+            Err(error_msg) => {
+                event_builder.map(|event| {
+                    event.set_error(serde_json::json!({
+                        "error": res.response.escape_ascii().to_string(),
+                        "status_code": res.status_code,
+                    }))
+                });
+                router_env::logger::error!(deserialization_error =? error_msg);
+                utils::handle_json_response_deserialization_failure(res, "cashtocode")
+            }
         }
     }
 }
+
+impl ConnectorValidation for Cashtocode {}
 
 impl ConnectorIntegration<Session, PaymentsSessionData, PaymentsResponseData> for Cashtocode {
     //TODO: implement sessions flow
@@ -197,7 +218,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
             PaymentsAuthorizeType::get_content_type(self)
@@ -408,15 +430,21 @@ impl webhooks::IncomingWebhook for Cashtocode {
 
     fn get_webhook_event_type(
         &self,
-        _request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
+        if request.body.is_empty() {
+            return Ok(api_models::webhooks::IncomingWebhookEvent::EventNotSupported);
+        }
+
         Ok(api_models::webhooks::IncomingWebhookEvent::PaymentIntentSuccess)
     }
 
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let webhook: transformers::CashtocodeIncomingWebhook = request
             .body
             .parse_struct("CashtocodeIncomingWebhook")
@@ -429,7 +457,10 @@ impl webhooks::IncomingWebhook for Cashtocode {
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
         _error_kind: Option<IncomingWebhookFlowError>,
-    ) -> CustomResult<ApplicationResponse<serde_json::Value>, errors::ConnectorError> {
+        _connector_authentication_type: Option<
+            common_utils::crypto::Encryptable<Secret<serde_json::Value>>,
+        >,
+    ) -> CustomResult<WebhookResponse<serde_json::Value>, errors::ConnectorError> {
         let status = "EXECUTED".to_string();
         let obj: transformers::CashtocodePaymentsSyncResponse = request
             .body
@@ -437,7 +468,7 @@ impl webhooks::IncomingWebhook for Cashtocode {
             .change_context(errors::ConnectorError::WebhookReferenceIdNotFound)?;
         let response: serde_json::Value =
             serde_json::json!({ "status": status, "transactionId" : obj.transaction_id});
-        Ok(ApplicationResponse::Json(response))
+        Ok(WebhookResponse::Json(response))
     }
 }
 
@@ -459,4 +490,61 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Cashtocod
     // default implementation of build_request method will be executed
 }
 
-impl ConnectorSpecifications for Cashtocode {}
+static CASHTOCODE_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(|| {
+        let supported_capture_methods = vec![
+            enums::CaptureMethod::Automatic,
+            enums::CaptureMethod::Manual,
+            enums::CaptureMethod::SequentialAutomatic,
+        ];
+
+        let mut cashtocode_supported_payment_methods = SupportedPaymentMethods::new();
+
+        cashtocode_supported_payment_methods.add(
+            enums::PaymentMethod::Reward,
+            enums::PaymentMethodType::ClassicReward,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::NotSupported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: None,
+            },
+        );
+
+        cashtocode_supported_payment_methods.add(
+            enums::PaymentMethod::Reward,
+            enums::PaymentMethodType::Evoucher,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::NotSupported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: None,
+            },
+        );
+
+        cashtocode_supported_payment_methods
+    });
+
+static CASHTOCODE_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+        display_name: "CashToCode",
+        description:
+            "CashToCode is a payment solution that enables users to convert cash into digital vouchers for online transactions",
+        connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+        integration_status: enums::ConnectorIntegrationStatus::Live,
+    };
+
+static CASHTOCODE_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 1] = [enums::EventClass::Payments];
+
+impl ConnectorSpecifications for Cashtocode {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&CASHTOCODE_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*CASHTOCODE_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&CASHTOCODE_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

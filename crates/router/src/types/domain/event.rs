@@ -5,11 +5,11 @@ use common_utils::{
     types::keymanager::{KeyManagerState, ToEncryptable},
 };
 use diesel_models::{
-    enums::{EventClass, EventObjectType, EventType, WebhookDeliveryAttempt},
+    enums::{EventClass, EventObjectType, EventRecipient, EventType, WebhookDeliveryAttempt},
     events::{EventMetadata, EventUpdateInternal},
 };
 use error_stack::ResultExt;
-use masking::{PeekInterface, Secret};
+use hyperswitch_masking::{PeekInterface, Secret};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -19,24 +19,92 @@ use crate::{
 
 #[derive(Clone, Debug, router_derive::ToEncryption)]
 pub struct Event {
+    /// A string that uniquely identifies the event.
     pub event_id: String,
+
+    /// Represents the type of event for the webhook.
     pub event_type: EventType,
+
+    /// Represents the class of event for the webhook.
     pub event_class: EventClass,
+
+    /// Indicates whether the current webhook delivery was successful.
     pub is_webhook_notified: bool,
+
+    /// Reference to the object for which the webhook was created.
     pub primary_object_id: String,
+
+    /// Type of the object type for which the webhook was created.
     pub primary_object_type: EventObjectType,
+
+    /// The timestamp when the webhook was created.
     pub created_at: time::PrimitiveDateTime,
+
+    /// Merchant Account identifier to which the object is associated with.
     pub merchant_id: Option<common_utils::id_type::MerchantId>,
+
+    /// Business Profile identifier to which the object is associated with.
     pub business_profile_id: Option<common_utils::id_type::ProfileId>,
+
+    /// The timestamp when the primary object was created.
     pub primary_object_created_at: Option<time::PrimitiveDateTime>,
+
+    /// This allows the event to be uniquely identified to prevent multiple processing.
     pub idempotent_event_id: Option<String>,
+
+    /// Links to the initial attempt of the event.
     pub initial_attempt_id: Option<String>,
+
+    /// This field contains the encrypted request data sent as part of the event.
     #[encrypt]
     pub request: Option<Encryptable<Secret<String>>>,
+
+    /// This field contains the encrypted response data received as part of the event.
     #[encrypt]
     pub response: Option<Encryptable<Secret<String>>>,
+
+    /// Represents the event delivery type.
     pub delivery_attempt: Option<WebhookDeliveryAttempt>,
+
+    /// Holds any additional data related to the event.
     pub metadata: Option<EventMetadata>,
+
+    /// Indicates whether the event was ultimately delivered.
+    pub is_overall_delivery_successful: Option<bool>,
+
+    /// The merchant_id of the merchant whose connector credentials are used for payment processing.
+    pub processor_merchant_id: Option<common_utils::id_type::MerchantId>,
+
+    /// The merchant_id of the merchant that initiated the operation for which this event was
+    /// generated. This is also the webhook recipient.
+    pub initiator_merchant_id: Option<common_utils::id_type::MerchantId>,
+
+    /// The intended recipient of the webhook event.
+    pub recipient: Option<EventRecipient>,
+}
+
+/// The API that is asking for this event's delivery-success value.
+#[derive(Clone, Copy, Debug)]
+pub enum DeliverySuccessSource {
+    ListInitialEvents,
+    ListDeliveryAttempts,
+}
+
+/// Pairs an event with the API context needed to resolve its delivery-success value — see
+/// `DeliverySuccessSource`.
+pub struct EventWithDeliverySuccessSource {
+    pub event: Event,
+    pub source: DeliverySuccessSource,
+}
+
+impl Event {
+    /// Resolves the correct delivery-success value for the given API context.
+    pub fn resolve_delivery_success(&self, source: DeliverySuccessSource) -> Option<bool> {
+        match source {
+            DeliverySuccessSource::ListInitialEvents => self.is_overall_delivery_successful,
+            DeliverySuccessSource::ListDeliveryAttempts => Some(self.is_webhook_notified),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -44,6 +112,9 @@ pub enum EventUpdate {
     UpdateResponse {
         is_webhook_notified: bool,
         response: OptionalEncryptableSecretString,
+    },
+    OverallDeliveryStatusUpdate {
+        is_overall_delivery_successful: bool,
     },
 }
 
@@ -56,6 +127,14 @@ impl From<EventUpdate> for EventUpdateInternal {
             } => Self {
                 is_webhook_notified: Some(is_webhook_notified),
                 response: response.map(Into::into),
+                is_overall_delivery_successful: None,
+            },
+            EventUpdate::OverallDeliveryStatusUpdate {
+                is_overall_delivery_successful,
+            } => Self {
+                is_webhook_notified: None,
+                response: None,
+                is_overall_delivery_successful: Some(is_overall_delivery_successful),
             },
         }
     }
@@ -84,6 +163,10 @@ impl super::behaviour::Conversion for Event {
             response: self.response.map(Into::into),
             delivery_attempt: self.delivery_attempt,
             metadata: self.metadata,
+            is_overall_delivery_successful: self.is_overall_delivery_successful,
+            processor_merchant_id: self.processor_merchant_id,
+            initiator_merchant_id: self.initiator_merchant_id,
+            recipient: self.recipient,
         })
     }
 
@@ -133,6 +216,10 @@ impl super::behaviour::Conversion for Event {
             response: encryptable_event.response,
             delivery_attempt: item.delivery_attempt,
             metadata: item.metadata,
+            is_overall_delivery_successful: item.is_overall_delivery_successful,
+            processor_merchant_id: item.processor_merchant_id,
+            initiator_merchant_id: item.initiator_merchant_id,
+            recipient: item.recipient,
         })
     }
 
@@ -154,6 +241,10 @@ impl super::behaviour::Conversion for Event {
             response: self.response.map(Into::into),
             delivery_attempt: self.delivery_attempt,
             metadata: self.metadata,
+            is_overall_delivery_successful: self.is_overall_delivery_successful,
+            processor_merchant_id: self.processor_merchant_id,
+            initiator_merchant_id: self.initiator_merchant_id,
+            recipient: self.recipient,
         })
     }
 }

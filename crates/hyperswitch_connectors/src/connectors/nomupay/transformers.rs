@@ -8,7 +8,7 @@ use hyperswitch_domain_models::{
     router_response_types::PayoutsResponseData, types::PayoutsRouterData,
 };
 use hyperswitch_interfaces::errors;
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "payouts")]
@@ -385,7 +385,7 @@ impl<F> TryFrom<&PayoutsRouterData<F>> for OnboardSubAccountRequest {
         match payout_type {
             Some(common_enums::PayoutType::Bank) => Ok(Self {
                 account_id: nomupay_auth_type.eid,
-                client_sub_account_id: Secret::new(request.payout_id),
+                client_sub_account_id: Secret::new(item.connector_request_reference_id.clone()),
                 profile,
             }),
             _ => Err(errors::ConnectorError::NotImplemented(
@@ -413,6 +413,8 @@ impl<F> TryFrom<PayoutsResponseRouterData<F, OnboardSubAccountResponse>> for Pay
                 should_add_next_step_to_process_tracker: false,
                 error_code: None,
                 error_message: None,
+                payout_connector_metadata: None,
+                connector_eligibility_reference_id: None,
             }),
             ..item.data
         })
@@ -426,8 +428,8 @@ impl<F> TryFrom<&PayoutsRouterData<F>> for OnboardTransferMethodRequest {
     fn try_from(item: &PayoutsRouterData<F>) -> Result<Self, Self::Error> {
         let payout_method_data = item.get_payout_method_data()?;
         match payout_method_data {
-            api_models::payouts::PayoutMethodData::Bank(bank) => match bank {
-                api_models::payouts::Bank::Sepa(bank_details) => {
+            api_models::payouts::PayoutMethodData::BankTransfer(bank) => match bank {
+                api_models::payouts::BankTransfer::Sepa(bank_details) => {
                     let bank_account = BankAccount {
                         bank_id: bank_details.bic,
                         account_id: bank_details.iban,
@@ -449,7 +451,7 @@ impl<F> TryFrom<&PayoutsRouterData<F>> for OnboardTransferMethodRequest {
                     })
                 }
                 other_bank => Err(errors::ConnectorError::NotSupported {
-                    message: format!("{:?} is not supported", other_bank),
+                    message: format!("{other_bank:?} is not supported"),
                     connector: "nomupay",
                 }
                 .into()),
@@ -479,6 +481,8 @@ impl<F> TryFrom<PayoutsResponseRouterData<F, OnboardTransferMethodResponse>>
                 should_add_next_step_to_process_tracker: false,
                 error_code: None,
                 error_message: None,
+                payout_connector_metadata: None,
+                connector_eligibility_reference_id: None,
             }),
             ..item.data
         })
@@ -498,7 +502,7 @@ impl<F> TryFrom<(&PayoutsRouterData<F>, FloatMajorUnit)> for NomupayPaymentReque
         Ok(Self {
             source_id: nomupay_auth_type.eid,
             destination_id: Secret::new(destination),
-            payment_reference: item.request.clone().payout_id,
+            payment_reference: item.connector_request_reference_id.clone(),
             amount,
             currency_code: item.request.destination_currency,
             purpose: PURPOSE_OF_PAYMENT_IS_OTHER.to_string(),
@@ -525,6 +529,8 @@ impl<F> TryFrom<PayoutsResponseRouterData<F, NomupayPaymentResponse>> for Payout
                 should_add_next_step_to_process_tracker: false,
                 error_code: None,
                 error_message: None,
+                payout_connector_metadata: None,
+                connector_eligibility_reference_id: None,
             }),
             ..item.data
         })

@@ -2,9 +2,9 @@ use actix_multipart::form::{bytes::Bytes, text::Text, MultipartForm};
 use common_enums::EntityType;
 use common_utils::{
     id_type,
-    types::theme::{EmailThemeConfig, ThemeLineage},
+    types::user::{EmailThemeConfig, ThemeLineage},
 };
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -20,6 +20,12 @@ pub struct GetThemeResponse {
     pub theme_data: ThemeData,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ThemeVersionResponse {
+    pub theme_id: String,
+    pub theme_config_version: String,
+}
+
 #[derive(Debug, MultipartForm)]
 pub struct UploadFileAssetData {
     pub asset_name: Text<String>,
@@ -29,7 +35,6 @@ pub struct UploadFileAssetData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UploadFileRequest {
-    pub lineage: ThemeLineage,
     pub asset_name: String,
     pub asset_data: Secret<Vec<u8>>,
 }
@@ -43,10 +48,17 @@ pub struct CreateThemeRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct UpdateThemeRequest {
-    pub lineage: ThemeLineage,
+pub struct CreateUserThemeRequest {
+    pub entity_type: EntityType,
+    pub theme_name: String,
     pub theme_data: ThemeData,
-    // TODO: Add support to update email config
+    pub email_config: Option<EmailThemeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UpdateThemeRequest {
+    pub theme_data: Option<ThemeData>,
+    pub email_config: Option<EmailThemeConfig>,
 }
 
 // All the below structs are for the theme.json file,
@@ -138,4 +150,10 @@ struct Spacing {
 struct Urls {
     favicon_url: Option<String>,
     logo_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub struct EntityTypeQueryParam {
+    pub entity_type: EntityType,
 }

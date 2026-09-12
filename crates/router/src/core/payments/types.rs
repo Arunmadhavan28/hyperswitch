@@ -9,7 +9,7 @@ use common_utils::{
 use error_stack::ResultExt;
 use hyperswitch_domain_models::payments::payment_attempt::PaymentAttempt;
 pub use hyperswitch_domain_models::router_request_types::{
-    AuthenticationData, SplitRefundsRequest, StripeSplitRefund, SurchargeDetails,
+    self, AuthenticationData, SplitRefundsRequest, StripeSplitRefund, SurchargeDetails,
 };
 use redis_interface::errors::RedisError;
 use router_env::{instrument, logger, tracing};
@@ -269,7 +269,7 @@ impl SurchargeMetadata {
         self.surcharge_results.get(&surcharge_key)
     }
     pub fn get_surcharge_metadata_redis_key(payment_attempt_id: &str) -> String {
-        format!("surcharge_metadata_{}", payment_attempt_id)
+        format!("surcharge_metadata_{payment_attempt_id}")
     }
     pub fn get_individual_surcharge_key_value_pairs(&self) -> Vec<(String, SurchargeDetails)> {
         self.surcharge_results
@@ -283,16 +283,13 @@ impl SurchargeMetadata {
     pub fn get_surcharge_details_redis_hashset_key(surcharge_key: &SurchargeKey) -> String {
         match surcharge_key {
             SurchargeKey::Token(token) => {
-                format!("token_{}", token)
+                format!("token_{token}")
             }
             SurchargeKey::PaymentMethodData(payment_method, payment_method_type, card_network) => {
                 if let Some(card_network) = card_network {
-                    format!(
-                        "{}_{}_{}",
-                        payment_method, payment_method_type, card_network
-                    )
+                    format!("{payment_method}_{payment_method_type}_{card_network}")
                 } else {
-                    format!("{}_{}", payment_method, payment_method_type)
+                    format!("{payment_method}_{payment_method_type}")
                 }
             }
         }
@@ -366,14 +363,58 @@ impl SurchargeMetadata {
     }
 }
 
-impl ForeignTryFrom<&storage::Authentication> for AuthenticationData {
+impl ForeignTryFrom<&router_request_types::authentication::AuthenticationStore>
+    for router_request_types::UcsAuthenticationData
+{
     type Error = error_stack::Report<errors::ApiErrorResponse>;
-    fn foreign_try_from(authentication: &storage::Authentication) -> Result<Self, Self::Error> {
+    fn foreign_try_from(
+        authentication_store: &router_request_types::authentication::AuthenticationStore,
+    ) -> Result<Self, Self::Error> {
+        let authentication = &authentication_store.authentication;
         if authentication.authentication_status == common_enums::AuthenticationStatus::Success {
             let threeds_server_transaction_id =
                 authentication.threeds_server_transaction_id.clone();
             let message_version = authentication.message_version.clone();
-            let cavv = authentication
+            let cavv = authentication_store
+                .cavv
+                .clone()
+                .get_required_value("cavv")
+                .change_context(errors::ApiErrorResponse::InternalServerError)
+                .attach_printable("cavv must not be null when authentication_status is success")?;
+            Ok(Self {
+                trans_status: authentication.trans_status.clone(),
+                eci: authentication.eci.clone(),
+                cavv: Some(cavv),
+                threeds_server_transaction_id,
+                message_version,
+                ds_trans_id: authentication.ds_trans_id.clone(),
+                acs_trans_id: authentication.acs_trans_id.clone(),
+                transaction_id: authentication.connector_authentication_id.clone(),
+                ucaf_collection_indicator: None,
+                challenge_code: authentication.challenge_code.clone(),
+                challenge_cancel: authentication.challenge_cancel.clone(),
+                challenge_code_reason: authentication.challenge_code_reason.clone(),
+                message_extension: authentication.message_extension.clone(),
+            })
+        } else {
+            Err(errors::ApiErrorResponse::PaymentAuthenticationFailed { data: None }.into())
+        }
+    }
+}
+
+impl ForeignTryFrom<&router_request_types::authentication::AuthenticationStore>
+    for AuthenticationData
+{
+    type Error = error_stack::Report<errors::ApiErrorResponse>;
+    fn foreign_try_from(
+        authentication_store: &router_request_types::authentication::AuthenticationStore,
+    ) -> Result<Self, Self::Error> {
+        let authentication = &authentication_store.authentication;
+        if authentication.authentication_status == common_enums::AuthenticationStatus::Success {
+            let threeds_server_transaction_id =
+                authentication.threeds_server_transaction_id.clone();
+            let message_version = authentication.message_version.clone();
+            let cavv = authentication_store
                 .cavv
                 .clone()
                 .get_required_value("cavv")
@@ -381,13 +422,55 @@ impl ForeignTryFrom<&storage::Authentication> for AuthenticationData {
                 .attach_printable("cavv must not be null when authentication_status is success")?;
             Ok(Self {
                 eci: authentication.eci.clone(),
+                created_at: authentication.created_at,
                 cavv,
                 threeds_server_transaction_id,
                 message_version,
                 ds_trans_id: authentication.ds_trans_id.clone(),
+                authentication_type: authentication.authentication_type,
+                challenge_code: authentication.challenge_code.clone(),
+                challenge_cancel: authentication.challenge_cancel.clone(),
+                challenge_code_reason: authentication.challenge_code_reason.clone(),
+                message_extension: authentication.message_extension.clone(),
+                acs_trans_id: authentication.acs_trans_id.clone(),
+                transaction_status: authentication.trans_status.clone(),
+                exemption_indicator: None,
+                cb_network_params: None,
             })
         } else {
             Err(errors::ApiErrorResponse::PaymentAuthenticationFailed { data: None }.into())
         }
+    }
+}
+
+impl ForeignTryFrom<&api_models::payments::ExternalThreeDsData> for AuthenticationData {
+    type Error = error_stack::Report<errors::ApiErrorResponse>;
+
+    fn foreign_try_from(
+        external_auth_data: &api_models::payments::ExternalThreeDsData,
+    ) -> Result<Self, Self::Error> {
+        let cavv = match &external_auth_data.authentication_cryptogram {
+            api_models::payments::Cryptogram::Cavv {
+                authentication_cryptogram,
+            } => authentication_cryptogram.clone(),
+        };
+
+        Ok(Self {
+            eci: Some(external_auth_data.eci.clone()),
+            cavv,
+            threeds_server_transaction_id: Some(external_auth_data.ds_trans_id.clone()),
+            message_version: Some(external_auth_data.version.clone()),
+            ds_trans_id: Some(external_auth_data.ds_trans_id.clone()),
+            created_at: common_utils::date_time::now(),
+            challenge_code: None,
+            challenge_cancel: None,
+            challenge_code_reason: None,
+            message_extension: None,
+            acs_trans_id: None,
+            authentication_type: None,
+            transaction_status: Some(external_auth_data.transaction_status.clone()),
+            exemption_indicator: external_auth_data.exemption_indicator.clone(),
+            cb_network_params: external_auth_data.network_params.clone(),
+        })
     }
 }

@@ -25,14 +25,14 @@ fn main() {
     let toml_contents = match std::fs::read_to_string(toml_file) {
         Ok(contents) => contents,
         Err(e) => {
-            eprintln!("Error reading TOML file: {}", e);
+            eprintln!("Error reading TOML file: {e}");
             return;
         }
     };
     let toml_data: Value = match toml_contents.parse() {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Error parsing TOML file: {}", e);
+            eprintln!("Error parsing TOML file: {e}");
             return;
         }
     };
@@ -42,14 +42,14 @@ fn main() {
     let input = match input_file::InputData::read(table) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("Error loading TOML file: {}", e);
+            eprintln!("Error loading TOML file: {e}");
             return;
         }
     };
 
     let db_url = input.postgres_url();
 
-    println!("Attempting to connect to {}", db_url);
+    println!("Attempting to connect to {db_url}");
 
     let mut conn = match PgConnection::establish(&db_url) {
         Ok(value) => value,
@@ -80,7 +80,7 @@ pub fn get_toml_table<'a>(table_name: &'a str, toml_data: &'a Value) -> &'a Valu
         match toml_data.get(table_name) {
             Some(value) => value,
             None => {
-                eprintln!("Unable to find toml table: \"{}\"", &table_name);
+                eprintln!("Unable to find toml table: \"{table_name}\"");
                 std::process::abort()
             }
         }
@@ -91,8 +91,6 @@ pub fn get_toml_table<'a>(table_name: &'a str, toml_data: &'a Value) -> &'a Valu
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use std::str::FromStr;
 
     use toml::Value;

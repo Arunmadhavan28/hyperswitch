@@ -3,7 +3,6 @@ use common_enums::FrmSuggestion;
 use common_utils::ext_traits::Encode;
 use diesel_models::enums::FraudCheckLastStep;
 use router_env::{instrument, tracing};
-use uuid::Uuid;
 
 use super::{Domain, FraudCheckOperation, GetTracker, UpdateTracker};
 use crate::{
@@ -45,7 +44,7 @@ where
     fn to_get_tracker(&self) -> RouterResult<&(dyn GetTracker<PaymentToFrmData> + Send + Sync)> {
         Ok(*self)
     }
-    fn to_domain(&self) -> RouterResult<&(dyn Domain<F, D>)> {
+    fn to_domain(&self) -> RouterResult<&dyn Domain<F, D>> {
         Ok(*self)
     }
     fn to_update_tracker(&self) -> RouterResult<&(dyn UpdateTracker<FrmData, F, D> + Send + Sync)> {
@@ -61,7 +60,7 @@ where
     fn to_get_tracker(&self) -> RouterResult<&(dyn GetTracker<PaymentToFrmData> + Send + Sync)> {
         Ok(self)
     }
-    fn to_domain(&self) -> RouterResult<&(dyn Domain<F, D>)> {
+    fn to_domain(&self) -> RouterResult<&dyn Domain<F, D>> {
         Ok(self)
     }
     fn to_update_tracker(&self) -> RouterResult<&(dyn UpdateTracker<FrmData, F, D> + Send + Sync)> {
@@ -108,9 +107,12 @@ impl GetTracker<PaymentToFrmData> for FraudCheckPre {
             Some(Some(fraud_check)) => Ok(fraud_check),
             _ => {
                 db.insert_fraud_check_response(FraudCheckNew {
-                    frm_id: Uuid::new_v4().simple().to_string(),
+                    frm_id: common_utils::generate_uuid_v4().simple().to_string(),
                     payment_id: payment_data.payment_intent.get_id().to_owned(),
                     merchant_id: payment_data.merchant_account.get_id().clone(),
+                    processor_merchant_id: Some(
+                        payment_data.payment_intent.processor_merchant_id.clone(),
+                    ),
                     attempt_id: payment_data.payment_attempt.attempt_id.clone(),
                     created_at: common_utils::date_time::now(),
                     frm_name: frm_connector_details.connector_name,
@@ -125,6 +127,7 @@ impl GetTracker<PaymentToFrmData> for FraudCheckPre {
                     modified_at: common_utils::date_time::now(),
                     last_step: FraudCheckLastStep::Processing,
                     payment_capture_method: payment_data.payment_attempt.capture_method,
+                    created_by: None,
                 })
                 .await
             }
@@ -159,7 +162,7 @@ where
     F: Clone + Send,
     D: payments::OperationSessionGetters<F> + Send + Sync + Clone,
 {
-    #[cfg(all(feature = "v2", feature = "customer_v2"))]
+    #[cfg(feature = "v2")]
     #[instrument(skip_all)]
     async fn post_payment_frm<'a>(
         &'a self,
@@ -167,14 +170,12 @@ where
         _req_state: ReqState,
         _payment_data: &mut D,
         _frm_data: &mut FrmData,
-        _merchant_account: &domain::MerchantAccount,
-        _customer: &Option<domain::Customer>,
-        _key_store: domain::MerchantKeyStore,
+        _platform: &domain::Platform,
     ) -> RouterResult<Option<FrmRouterData>> {
         todo!()
     }
 
-    #[cfg(all(any(feature = "v1", feature = "v2"), not(feature = "customer_v2")))]
+    #[cfg(feature = "v1")]
     #[instrument(skip_all)]
     async fn post_payment_frm<'a>(
         &'a self,
@@ -182,17 +183,13 @@ where
         _req_state: ReqState,
         payment_data: &mut D,
         frm_data: &mut FrmData,
-        merchant_account: &domain::MerchantAccount,
-        customer: &Option<domain::Customer>,
-        key_store: domain::MerchantKeyStore,
+        platform: &domain::Platform,
     ) -> RouterResult<Option<FrmRouterData>> {
         let router_data = frm_core::call_frm_service::<F, frm_api::Transaction, _, D>(
             state,
             payment_data,
             &mut frm_data.to_owned(),
-            merchant_account,
-            &key_store,
-            customer,
+            platform,
         )
         .await?;
         frm_data.fraud_check.last_step = FraudCheckLastStep::TransactionOrRecordRefund;
@@ -210,6 +207,7 @@ where
                 error_message: router_data.request.error_message,
                 connector_transaction_id: router_data.request.connector_transaction_id,
                 connector: router_data.request.connector,
+                frm_transaction_id: frm_data.fraud_check.frm_transaction_id.clone(),
             }),
             response: FrmResponse::Transaction(router_data.response),
         }))
@@ -220,19 +218,28 @@ where
         state: &'a SessionState,
         payment_data: &mut D,
         frm_data: &mut FrmData,
-        merchant_account: &domain::MerchantAccount,
-        customer: &Option<domain::Customer>,
-        key_store: domain::MerchantKeyStore,
+        platform: &domain::Platform,
     ) -> RouterResult<FrmRouterData> {
         let router_data = frm_core::call_frm_service::<F, frm_api::Checkout, _, D>(
             state,
             payment_data,
             &mut frm_data.to_owned(),
-            merchant_account,
-            &key_store,
-            customer,
+            platform,
         )
         .await?;
+
+        // Extract frm_transaction_id from checkout response
+        if let Ok(FraudCheckResponseData::TransactionResponse {
+            ref resource_id, ..
+        }) = router_data.response
+        {
+            frm_data.fraud_check.frm_transaction_id = match resource_id {
+                ResponseId::NoResponseId => None,
+                ResponseId::ConnectorTransactionId(id) => Some(id.clone()),
+                ResponseId::EncodedData(id) => Some(id.clone()),
+            };
+        }
+
         frm_data.fraud_check.last_step = FraudCheckLastStep::CheckoutOrSale;
         Ok(FrmRouterData {
             merchant_id: router_data.merchant_id,
@@ -245,8 +252,13 @@ where
                 currency: router_data.request.currency,
                 browser_info: router_data.request.browser_info,
                 payment_method_data: router_data.request.payment_method_data,
-                email: router_data.request.email,
                 gateway: router_data.request.gateway,
+                client_ip: router_data.request.client_ip,
+                customer_id: router_data.request.customer_id,
+                email: router_data.request.email,
+                phone: router_data.request.phone,
+                phone_country_code: router_data.request.phone_country_code,
+                gateway_metadata: router_data.request.gateway_metadata,
             })),
             response: FrmResponse::Checkout(router_data.response),
         })

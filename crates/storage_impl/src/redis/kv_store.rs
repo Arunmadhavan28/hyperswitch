@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use common_utils::errors::CustomResult;
 use diesel_models::enums::MerchantStorageScheme;
@@ -8,7 +8,7 @@ use router_derive::TryGetEnumVariant;
 use router_env::logger;
 use serde::de;
 
-use crate::{kv_router_store::KVRouterStore, metrics, store::kv::TypedSql, UniqueConstraints};
+use crate::{kv_router_store::KVRouterStore, metrics, store::kv, UniqueConstraints};
 
 pub trait KvStorePartition {
     fn partition_number(key: PartitionKey<'_>, num_partitions: u8) -> u32 {
@@ -20,7 +20,6 @@ pub trait KvStorePartition {
     }
 }
 
-#[allow(unused)]
 #[derive(Clone)]
 pub enum PartitionKey<'a> {
     MerchantIdPaymentId {
@@ -34,26 +33,29 @@ pub enum PartitionKey<'a> {
         merchant_id: &'a common_utils::id_type::MerchantId,
         customer_id: &'a common_utils::id_type::CustomerId,
     },
-    #[cfg(all(feature = "v2", feature = "customer_v2"))]
+    #[cfg(feature = "v2")]
     MerchantIdMerchantReferenceId {
         merchant_id: &'a common_utils::id_type::MerchantId,
         merchant_reference_id: &'a str,
     },
     MerchantIdPayoutId {
         merchant_id: &'a common_utils::id_type::MerchantId,
-        payout_id: &'a str,
-    },
-    MerchantIdPayoutAttemptId {
-        merchant_id: &'a common_utils::id_type::MerchantId,
-        payout_attempt_id: &'a str,
+        payout_id: &'a common_utils::id_type::PayoutId,
     },
     MerchantIdMandateId {
         merchant_id: &'a common_utils::id_type::MerchantId,
         mandate_id: &'a str,
     },
-    #[cfg(all(feature = "v2", feature = "customer_v2"))]
+    AuthenticationId {
+        authentication_id: &'a common_utils::id_type::AuthenticationId,
+    },
+    #[cfg(feature = "v2")]
     GlobalId {
         id: &'a str,
+    },
+    #[cfg(feature = "v2")]
+    GlobalPaymentId {
+        id: &'a common_utils::id_type::GlobalPaymentId,
     },
 }
 // PartitionKey::MerchantIdPaymentId {merchant_id, payment_id}
@@ -64,7 +66,7 @@ impl std::fmt::Display for PartitionKey<'_> {
                 merchant_id,
                 payment_id,
             } => f.write_str(&format!(
-                "mid_{}_pid_{}",
+                "payment_{}_{}",
                 merchant_id.get_string_repr(),
                 payment_id.get_string_repr()
             )),
@@ -73,11 +75,11 @@ impl std::fmt::Display for PartitionKey<'_> {
                 merchant_id,
                 customer_id,
             } => f.write_str(&format!(
-                "mid_{}_cust_{}",
+                "customer_{}_{}",
                 merchant_id.get_string_repr(),
                 customer_id.get_string_repr()
             )),
-            #[cfg(all(feature = "v2", feature = "customer_v2"))]
+            #[cfg(feature = "v2")]
             PartitionKey::MerchantIdMerchantReferenceId {
                 merchant_id,
                 merchant_reference_id,
@@ -89,26 +91,29 @@ impl std::fmt::Display for PartitionKey<'_> {
                 merchant_id,
                 payout_id,
             } => f.write_str(&format!(
-                "mid_{}_po_{payout_id}",
-                merchant_id.get_string_repr()
-            )),
-            PartitionKey::MerchantIdPayoutAttemptId {
-                merchant_id,
-                payout_attempt_id,
-            } => f.write_str(&format!(
-                "mid_{}_poa_{payout_attempt_id}",
-                merchant_id.get_string_repr()
+                "payout_{}_{}",
+                merchant_id.get_string_repr(),
+                payout_id.get_string_repr()
             )),
             PartitionKey::MerchantIdMandateId {
                 merchant_id,
                 mandate_id,
             } => f.write_str(&format!(
-                "mid_{}_mandate_{mandate_id}",
-                merchant_id.get_string_repr()
+                "mandate_{}_{}",
+                merchant_id.get_string_repr(),
+                mandate_id
+            )),
+            PartitionKey::AuthenticationId { authentication_id } => f.write_str(&format!(
+                "authentication_{}",
+                authentication_id.get_string_repr()
             )),
 
-            #[cfg(all(feature = "v2", feature = "customer_v2"))]
-            PartitionKey::GlobalId { id } => f.write_str(&format!("cust_{id}",)),
+            #[cfg(feature = "v2")]
+            PartitionKey::GlobalId { id } => f.write_str(&format!("global_cust_{id}")),
+            #[cfg(feature = "v2")]
+            PartitionKey::GlobalPaymentId { id } => {
+                f.write_str(&format!("global_payment_{}", id.get_string_repr()))
+            }
         }
     }
 }
@@ -116,14 +121,14 @@ impl std::fmt::Display for PartitionKey<'_> {
 pub trait RedisConnInterface {
     fn get_redis_conn(
         &self,
-    ) -> error_stack::Result<Arc<redis_interface::RedisConnectionPool>, RedisError>;
+    ) -> error_stack::Result<redis_interface::RedisConnectionWithContext, RedisError>;
 }
 
 /// An enum to represent what operation to do on
 pub enum KvOperation<'a, S: serde::Serialize + Debug> {
-    Hset((&'a str, String), TypedSql),
-    SetNx(&'a S, TypedSql),
-    HSetNx(&'a str, &'a S, TypedSql),
+    Hset((&'a str, String), kv::SerializableQuery),
+    SetNx(&'a S, kv::SerializableQuery),
+    HSetNx(&'a str, &'a S, kv::SerializableQuery),
     HGet(&'a str),
     Get,
     Scan(&'a str),
@@ -139,6 +144,18 @@ pub enum KvResult<T: de::DeserializeOwned> {
     HSetNx(redis_interface::HsetnxReply),
     Scan(Vec<T>),
 }
+
+#[cfg(feature = "deja")]
+pub trait DejaKvValue: serde::Serialize {}
+
+#[cfg(feature = "deja")]
+impl<T: serde::Serialize> DejaKvValue for T {}
+
+#[cfg(not(feature = "deja"))]
+pub trait DejaKvValue {}
+
+#[cfg(not(feature = "deja"))]
+impl<T> DejaKvValue for T {}
 
 impl<T> std::fmt::Display for KvOperation<'_, T>
 where
@@ -162,13 +179,13 @@ pub async fn kv_wrapper<'a, T, D, S>(
     partition_key: PartitionKey<'a>,
 ) -> CustomResult<KvResult<T>, RedisError>
 where
-    T: de::DeserializeOwned,
+    T: de::DeserializeOwned + DejaKvValue,
     D: crate::database::store::DatabaseStore,
     S: serde::Serialize + Debug + KvStorePartition + UniqueConstraints + Sync,
 {
-    let redis_conn = store.get_redis_conn()?;
+    let redis_conn = store.router_store.get_redis_conn()?;
 
-    let key = format!("{}", partition_key);
+    let key = format!("{partition_key}");
 
     let type_name = std::any::type_name::<T>();
     let operation = op.to_string();
@@ -177,15 +194,15 @@ where
 
     let result = async {
         match op {
-            KvOperation::Hset(value, sql) => {
+            KvOperation::Hset(value, query) => {
                 logger::debug!(kv_operation= %operation, value = ?value);
 
                 redis_conn
-                    .set_hash_fields(&key.into(), value, Some(ttl.into()))
+                    .set_hash_fields(&key.into(), vec![value], Some(ttl.into()))
                     .await?;
 
                 store
-                    .push_to_drainer_stream::<S>(sql, partition_key)
+                    .push_to_drainer_stream::<S>(query, partition_key)
                     .await?;
 
                 Ok(KvResult::Hset(()))
@@ -212,7 +229,7 @@ where
                 Ok(KvResult::Scan(result))
             }
 
-            KvOperation::HSetNx(field, value, sql) => {
+            KvOperation::HSetNx(field, value, query) => {
                 logger::debug!(kv_operation= %operation, value = ?value);
 
                 value.check_for_constraints(&redis_conn).await?;
@@ -223,7 +240,7 @@ where
 
                 if matches!(result, redis_interface::HsetnxReply::KeySet) {
                     store
-                        .push_to_drainer_stream::<S>(sql, partition_key)
+                        .push_to_drainer_stream::<S>(query, partition_key)
                         .await?;
                     Ok(KvResult::HSetNx(result))
                 } else {
@@ -231,7 +248,7 @@ where
                 }
             }
 
-            KvOperation::SetNx(value, sql) => {
+            KvOperation::SetNx(value, query) => {
                 logger::debug!(kv_operation= %operation, value = ?value);
 
                 let result = redis_conn
@@ -242,7 +259,7 @@ where
 
                 if matches!(result, redis_interface::SetnxReply::KeySet) {
                     store
-                        .push_to_drainer_stream::<S>(sql, partition_key)
+                        .push_to_drainer_stream::<S>(query, partition_key)
                         .await?;
                     Ok(KvResult::SetNx(result))
                 } else {
@@ -284,7 +301,7 @@ impl std::fmt::Display for Op<'_> {
             Op::Insert => f.write_str("insert"),
             Op::Find => f.write_str("find"),
             Op::Update(p_key, _, updated_by) => {
-                f.write_str(&format!("update_{} for updated_by_{:?}", p_key, updated_by))
+                f.write_str(&format!("update_{p_key} for updated_by_{updated_by:?}"))
             }
         }
     }
@@ -330,7 +347,7 @@ where
         };
 
         let type_name = std::any::type_name::<D>();
-        logger::info!(soft_kill_mode = "decide_storage_scheme", decided_scheme = %updated_scheme, configured_scheme = %storage_scheme,entity = %type_name, operation = %ops);
+        logger::info!(soft_kill_mode = "decide_storage_scheme", decided_scheme = %updated_scheme, configured_scheme = %storage_scheme, entity = %type_name, operation = %ops);
 
         updated_scheme
     } else {

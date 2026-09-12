@@ -15,7 +15,7 @@ use api_models::{
     },
     enums::{
         AttemptStatus, AuthenticationType, Connector, Currency, DisputeStage, IntentStatus,
-        PaymentMethod, PaymentMethodType,
+        PaymentMethod, PaymentMethodType, RoutingApproach,
     },
     refunds::RefundStatus,
 };
@@ -370,7 +370,7 @@ impl<T: AnalyticsDataSource> ToSql<T> for FilterCombinator {
 #[derive(Debug, Clone)]
 pub enum Filter {
     Plain(String, FilterTypes, String),
-    NestedFilter(FilterCombinator, Vec<Filter>),
+    NestedFilter(FilterCombinator, Vec<Self>),
 }
 
 impl Default for Filter {
@@ -454,6 +454,12 @@ impl<T: AnalyticsDataSource> ToSql<T> for &common_utils::id_type::PaymentId {
     }
 }
 
+impl<T: AnalyticsDataSource> ToSql<T> for &common_utils::id_type::PayoutId {
+    fn to_sql(&self, _table_engine: &TableEngine) -> error_stack::Result<String, ParsingError> {
+        Ok(self.get_string_repr().to_owned())
+    }
+}
+
 impl<T: AnalyticsDataSource> ToSql<T> for common_utils::id_type::CustomerId {
     fn to_sql(&self, _table_engine: &TableEngine) -> error_stack::Result<String, ParsingError> {
         Ok(self.get_string_repr().to_owned())
@@ -514,7 +520,8 @@ impl_to_sql_for_to_string!(
     &bool,
     &u64,
     u64,
-    Order
+    Order,
+    RoutingApproach
 );
 
 impl_to_sql_for_to_string!(
@@ -545,17 +552,28 @@ pub enum FilterTypes {
     IsNotNull,
 }
 
+/// Strips whitespace and escapes SQL string metacharacters so the value is
+/// safe inside a single-quoted SQL literal: `'<sanitized>'`.
+pub fn sanitize_sql_string_literal(raw: &str) -> String {
+    let sanitized = raw
+        .replace(' ', "")
+        .replace('\\', "\\\\")
+        .replace('\'', "''");
+    format!("'{sanitized}'")
+}
+
 pub fn filter_type_to_sql(l: &str, op: FilterTypes, r: &str) -> String {
+    let str = || r.replace('\\', "\\\\").replace('\'', "''");
     match op {
         FilterTypes::EqualBool => format!("{l} = {r}"),
-        FilterTypes::Equal => format!("{l} = '{r}'"),
-        FilterTypes::NotEqual => format!("{l} != '{r}'"),
+        FilterTypes::Equal => format!("{l} = '{}'", str()),
+        FilterTypes::NotEqual => format!("{l} != '{}'", str()),
         FilterTypes::In => format!("{l} IN ({r})"),
-        FilterTypes::Gte => format!("{l} >= '{r}'"),
+        FilterTypes::Gte => format!("{l} >= '{}'", str()),
         FilterTypes::Gt => format!("{l} > {r}"),
-        FilterTypes::Lte => format!("{l} <= '{r}'"),
-        FilterTypes::Like => format!("{l} LIKE '%{r}%'"),
-        FilterTypes::NotLike => format!("{l} NOT LIKE '%{r}%'"),
+        FilterTypes::Lte => format!("{l} <= '{}'", str()),
+        FilterTypes::Like => format!("{l} LIKE '%{}%'", str()),
+        FilterTypes::NotLike => format!("{l} NOT LIKE '%{}%'", str()),
         FilterTypes::IsNotNull => format!("{l} IS NOT NULL"),
     }
 }
@@ -698,11 +716,8 @@ where
         let list = values
             .iter()
             .map(|i| {
-                // trimming whitespaces from the filter values received in request, to prevent a possibility of an SQL injection
-                i.to_sql(&self.table_engine).map(|s| {
-                    let trimmed_str = s.replace(' ', "");
-                    format!("'{trimmed_str}'")
-                })
+                i.to_sql(&self.table_engine)
+                    .map(|s| sanitize_sql_string_literal(&s))
             })
             .collect::<error_stack::Result<Vec<String>, ParsingError>>()
             .change_context(QueryBuildingError::SqlSerializeError)
@@ -736,7 +751,7 @@ where
             .change_context(QueryBuildingError::SqlSerializeError)
             .attach_printable("Error serializing order direction")?;
 
-        self.order_by.push(format!("{} {}", column_sql, order_sql));
+        self.order_by.push(format!("{column_sql} {order_sql}"));
         Ok(())
     }
 
@@ -891,13 +906,13 @@ where
         }
 
         if let Some(limit_by) = &self.limit_by {
-            query.push_str(&format!(" {}", limit_by));
+            query.push_str(&format!(" {limit_by}"));
         }
 
         if !self.outer_select.is_empty() {
             query.insert_str(
                 0,
-                format!("SELECT {} FROM (", &self.get_outer_select_clause()).as_str(),
+                format!("SELECT {} FROM (", self.get_outer_select_clause()).as_str(),
             );
             query.push_str(") _");
         }
@@ -945,6 +960,7 @@ where
             Self::MerchantLevel {
                 org_id,
                 merchant_ids,
+                processor_merchant_ids,
             } => {
                 builder
                     .add_filter_clause("organization_id", org_id)
@@ -952,11 +968,17 @@ where
                 builder
                     .add_filter_in_range_clause("merchant_id", merchant_ids)
                     .attach_printable("Error adding merchant_id filter")?;
+                if let Some(processor_mids) = processor_merchant_ids {
+                    builder
+                        .add_filter_in_range_clause("processor_merchant_id", processor_mids)
+                        .attach_printable("Error adding processor_merchant_id filter")?;
+                }
             }
             Self::ProfileLevel {
                 org_id,
                 merchant_id,
                 profile_ids,
+                processor_merchant_id,
             } => {
                 builder
                     .add_filter_clause("organization_id", org_id)
@@ -967,6 +989,11 @@ where
                 builder
                     .add_filter_in_range_clause("profile_id", profile_ids)
                     .attach_printable("Error adding profile_id filter")?;
+                if let Some(processor_mid) = processor_merchant_id {
+                    builder
+                        .add_filter_clause("processor_merchant_id", processor_mid)
+                        .attach_printable("Error adding processor_merchant_id filter")?;
+                }
             }
         }
         Ok(())

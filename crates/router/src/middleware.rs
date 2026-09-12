@@ -1,80 +1,13 @@
 use common_utils::consts::TENANT_HEADER;
 use futures::StreamExt;
+// Re-export RequestId from router_env for convenience
+pub use router_env::RequestId;
 use router_env::{
     logger,
     tracing::{field::Empty, Instrument},
 };
 
-use crate::headers;
-/// Middleware to include request ID in response header.
-pub struct RequestId;
-
-impl<S, B> actix_web::dev::Transform<S, actix_web::dev::ServiceRequest> for RequestId
-where
-    S: actix_web::dev::Service<
-        actix_web::dev::ServiceRequest,
-        Response = actix_web::dev::ServiceResponse<B>,
-        Error = actix_web::Error,
-    >,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = actix_web::dev::ServiceResponse<B>;
-    type Error = actix_web::Error;
-    type Transform = RequestIdMiddleware<S>;
-    type InitError = ();
-    type Future = std::future::Ready<Result<Self::Transform, Self::InitError>>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        std::future::ready(Ok(RequestIdMiddleware { service }))
-    }
-}
-
-pub struct RequestIdMiddleware<S> {
-    service: S,
-}
-
-impl<S, B> actix_web::dev::Service<actix_web::dev::ServiceRequest> for RequestIdMiddleware<S>
-where
-    S: actix_web::dev::Service<
-        actix_web::dev::ServiceRequest,
-        Response = actix_web::dev::ServiceResponse<B>,
-        Error = actix_web::Error,
-    >,
-    S::Future: 'static,
-    B: 'static,
-{
-    type Response = actix_web::dev::ServiceResponse<B>;
-    type Error = actix_web::Error;
-    type Future = futures::future::LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    actix_web::dev::forward_ready!(service);
-
-    fn call(&self, req: actix_web::dev::ServiceRequest) -> Self::Future {
-        let old_x_request_id = req.headers().get("x-request-id").cloned();
-        let mut req = req;
-        let request_id_fut = req.extract::<router_env::tracing_actix_web::RequestId>();
-        let response_fut = self.service.call(req);
-
-        Box::pin(
-            async move {
-                let request_id = request_id_fut.await?;
-                let request_id = request_id.as_hyphenated().to_string();
-                if let Some(upstream_request_id) = old_x_request_id {
-                    router_env::logger::info!(?upstream_request_id);
-                }
-                let mut response = response_fut.await?;
-                response.headers_mut().append(
-                    http::header::HeaderName::from_static("x-request-id"),
-                    http::HeaderValue::from_str(&request_id)?,
-                );
-
-                Ok(response)
-            }
-            .in_current_span(),
-        )
-    }
-}
+use crate::{headers, routes::metrics};
 
 /// Middleware for attaching default response headers. Headers with the same key already set in a
 /// response will not be overwritten.
@@ -177,14 +110,14 @@ where
 
 fn get_request_details_from_value(json_value: &serde_json::Value, parent_key: &str) -> String {
     match json_value {
-        serde_json::Value::Null => format!("{}: null", parent_key),
-        serde_json::Value::Bool(b) => format!("{}: {}", parent_key, b),
+        serde_json::Value::Null => format!("{parent_key}: null"),
+        serde_json::Value::Bool(b) => format!("{parent_key}: {b}"),
         serde_json::Value::Number(num) => format!("{}: {}", parent_key, num.to_string().len()),
         serde_json::Value::String(s) => format!("{}: {}", parent_key, s.len()),
         serde_json::Value::Array(arr) => {
             let mut result = String::new();
             for (index, value) in arr.iter().enumerate() {
-                let child_key = format!("{}[{}]", parent_key, index);
+                let child_key = format!("{parent_key}[{index}]");
                 result.push_str(&get_request_details_from_value(value, &child_key));
                 if index < arr.len() - 1 {
                     result.push_str(", ");
@@ -195,7 +128,7 @@ fn get_request_details_from_value(json_value: &serde_json::Value, parent_key: &s
         serde_json::Value::Object(obj) => {
             let mut result = String::new();
             for (index, (key, value)) in obj.iter().enumerate() {
-                let child_key = format!("{}[{}]", parent_key, key);
+                let child_key = format!("{parent_key}[{key}]");
                 result.push_str(&get_request_details_from_value(value, &child_key));
                 if index < obj.len() - 1 {
                     result.push_str(", ");
@@ -256,7 +189,7 @@ where
 
     fn call(&self, mut req: actix_web::dev::ServiceRequest) -> Self::Future {
         let svc = self.service.clone();
-        let request_id_fut = req.extract::<router_env::tracing_actix_web::RequestId>();
+        let request_id_fut = req.extract::<RequestId>();
         Box::pin(async move {
             let (http_req, payload) = req.into_parts();
             let result_payload: Vec<Result<bytes::Bytes, actix_web::error::PayloadError>> =
@@ -279,7 +212,7 @@ where
             let response = response_fut.await?;
             // Log the request_details when we receive 400 status from the application
             if response.status() == 400 {
-                let request_id = request_id_fut.await?.as_hyphenated().to_string();
+                let request_id = request_id_fut.await?.to_string();
                 let content_length_header_string = content_length_header
                     .map(|content_length_header| {
                         content_length_header.to_str().map(ToOwned::to_owned)
@@ -363,6 +296,7 @@ where
     type Future = futures::future::LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     actix_web::dev::forward_ready!(service);
+
     fn call(&self, mut req: actix_web::dev::ServiceRequest) -> Self::Future {
         let svc = self.service.clone();
         Box::pin(async move {
@@ -374,8 +308,7 @@ where
             let locale_param =
                 serde_qs::from_str::<LocaleQueryParam>(query_params).map_err(|error| {
                     actix_web::error::ErrorBadRequest(format!(
-                        "Could not convert query params to locale query parmas: {:?}",
-                        error
+                        "Could not convert query params to locale query parmas: {error:?}",
                     ))
                 })?;
             let accept_language_header = req.headers().get(http::header::ACCEPT_LANGUAGE);
@@ -392,6 +325,90 @@ where
             }
             let response_fut = svc.call(req);
             let response = response_fut.await?;
+            Ok(response)
+        })
+    }
+}
+
+/// Middleware for recording request-response metrics
+pub struct RequestResponseMetrics;
+
+impl<S: 'static, B> actix_web::dev::Transform<S, actix_web::dev::ServiceRequest>
+    for RequestResponseMetrics
+where
+    S: actix_web::dev::Service<
+        actix_web::dev::ServiceRequest,
+        Response = actix_web::dev::ServiceResponse<B>,
+        Error = actix_web::Error,
+    >,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = actix_web::dev::ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Transform = RequestResponseMetricsMiddleware<S>;
+    type InitError = ();
+    type Future = std::future::Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        std::future::ready(Ok(RequestResponseMetricsMiddleware {
+            service: std::rc::Rc::new(service),
+        }))
+    }
+}
+
+pub struct RequestResponseMetricsMiddleware<S> {
+    service: std::rc::Rc<S>,
+}
+
+impl<S, B> actix_web::dev::Service<actix_web::dev::ServiceRequest>
+    for RequestResponseMetricsMiddleware<S>
+where
+    S: actix_web::dev::Service<
+            actix_web::dev::ServiceRequest,
+            Response = actix_web::dev::ServiceResponse<B>,
+            Error = actix_web::Error,
+        > + 'static,
+    S::Future: 'static,
+    B: 'static,
+{
+    type Response = actix_web::dev::ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Future = futures::future::LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    actix_web::dev::forward_ready!(service);
+
+    fn call(&self, req: actix_web::dev::ServiceRequest) -> Self::Future {
+        use std::borrow::Cow;
+
+        let svc = self.service.clone();
+
+        let request_path = req
+            .match_pattern()
+            .map(Cow::<'static, str>::from)
+            .unwrap_or_else(|| "UNKNOWN".into());
+        let request_method = Cow::<'static, str>::from(req.method().as_str().to_owned());
+
+        Box::pin(async move {
+            let mut attributes =
+                router_env::metric_attributes!(("path", request_path), ("method", request_method))
+                    .to_vec();
+
+            let response_fut = svc.call(req);
+
+            metrics::REQUESTS_RECEIVED.add(1, &attributes);
+
+            let (response_result, request_duration) =
+                common_utils::metrics::utils::time_future(response_fut).await;
+            let response = response_result?;
+
+            attributes.extend_from_slice(router_env::metric_attributes!((
+                "status_code",
+                i64::from(response.status().as_u16())
+            )));
+
+            metrics::REQUEST_TIME.record(request_duration.as_secs_f64(), &attributes);
+
             Ok(response)
         })
     }

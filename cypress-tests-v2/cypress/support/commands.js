@@ -27,7 +27,10 @@
 //  cy.task can only be used in support files (spec files or commands file)
 
 import { nanoid } from "nanoid";
-import { getValueByKey } from "../e2e/configs/Payment/Utils.js";
+import {
+  defaultErrorHandler,
+  getValueByKey,
+} from "../e2e/configs/Payment/Utils.js";
 import { isoTimeTomorrow, validateEnv } from "../utils/RequestBodyUtils.js";
 
 function logRequestId(xRequestId) {
@@ -45,7 +48,7 @@ Cypress.Commands.add(
     // Define the necessary variables and constants
     const api_key = globalState.get("adminApiKey");
     const base_url = globalState.get("baseUrl");
-    const url = `${base_url}/v2/organization`;
+    const url = `${base_url}/v2/organizations`;
 
     // Update request body
     organizationCreateBody.organization_name += " " + nanoid();
@@ -55,7 +58,7 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
       },
       body: organizationCreateBody,
       failOnStatusCode: false,
@@ -84,14 +87,14 @@ Cypress.Commands.add("organizationRetrieveCall", (globalState) => {
   const api_key = globalState.get("adminApiKey");
   const base_url = globalState.get("baseUrl");
   const organization_id = globalState.get("organizationId");
-  const url = `${base_url}/v2/organization/${organization_id}`;
+  const url = `${base_url}/v2/organizations/${organization_id}`;
 
   cy.request({
     method: "GET",
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
     },
     failOnStatusCode: false,
   }).then((response) => {
@@ -125,7 +128,7 @@ Cypress.Commands.add(
     const api_key = globalState.get("adminApiKey");
     const base_url = globalState.get("baseUrl");
     const organization_id = globalState.get("organizationId");
-    const url = `${base_url}/v2/organization/${organization_id}`;
+    const url = `${base_url}/v2/organizations/${organization_id}`;
 
     // Update request body
     organizationUpdateBody.organization_name += " " + nanoid();
@@ -135,7 +138,7 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
       },
       body: organizationUpdateBody,
       failOnStatusCode: false,
@@ -185,7 +188,7 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
         "X-Organization-Id": organization_id,
       },
       body: merchantAccountCreateBody,
@@ -230,7 +233,7 @@ Cypress.Commands.add("merchantAccountRetrieveCall", (globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
     },
     failOnStatusCode: false,
   }).then((response) => {
@@ -274,7 +277,7 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
       },
       body: merchantAccountUpdateBody,
       failOnStatusCode: false,
@@ -324,7 +327,8 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
+        "x-merchant-id": merchant_id,
         ...customHeaders,
       },
       body: businessProfileCreateBody,
@@ -368,7 +372,7 @@ Cypress.Commands.add("businessProfileRetrieveCall", (globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       ...customHeaders,
     },
     failOnStatusCode: false,
@@ -410,7 +414,7 @@ Cypress.Commands.add(
       url: url,
       headers: {
         "Content-Type": "application/json",
-        "api-key": api_key,
+        Authorization: `admin-api-key=${api_key}`,
         ...customHeaders,
       },
       body: businessProfileUpdateBody,
@@ -460,6 +464,7 @@ Cypress.Commands.add(
 
     const customHeaders = {
       "x-merchant-id": merchant_id,
+      "x-profile-id": profile_id,
     };
 
     // Update request body
@@ -501,7 +506,7 @@ Cypress.Commands.add(
           url: url,
           headers: {
             "Content-Type": "application/json",
-            "api-key": api_key,
+            Authorization: `admin-api-key=${api_key}`,
             ...customHeaders,
           },
           body: mcaCreateBody,
@@ -536,10 +541,12 @@ Cypress.Commands.add("mcaRetrieveCall", (globalState) => {
   const connector_name = globalState.get("connectorId");
   const merchant_connector_id = globalState.get("merchantConnectorId");
   const merchant_id = globalState.get("merchantId");
+  const profile_id = globalState.get("profileId");
   const url = `${base_url}/v2/connector-accounts/${merchant_connector_id}`;
 
   const customHeaders = {
     "x-merchant-id": merchant_id,
+    "x-profile-id": profile_id,
   };
 
   cy.request({
@@ -547,7 +554,7 @@ Cypress.Commands.add("mcaRetrieveCall", (globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       ...customHeaders,
     },
     failOnStatusCode: false,
@@ -602,42 +609,61 @@ Cypress.Commands.add(
     mcaUpdateBody.connector_type = connectorType;
     mcaUpdateBody.payment_methods_enabled = paymentMethodsEnabled;
 
-    cy.request({
-      method: "PUT",
-      url: url,
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": api_key,
-        ...customHeaders,
-      },
-      body: mcaUpdateBody,
-      failOnStatusCode: false,
-    }).then((response) => {
-      logRequestId(response.headers["x-request-id"]);
+    // Read connector auth file and merge metadata
+    cy.readFile(globalState.get("connectorAuthFilePath")).then(
+      (jsonContent) => {
+        const jsonString = JSON.stringify(jsonContent);
+        const key =
+          connectorType === "payment_processor"
+            ? connectorName
+            : `${connectorName}_payout`;
+        const authDetails = getValueByKey(jsonString, key);
 
-      if (response.status === 200) {
-        expect(response.body.connector_name).to.equal(connectorName);
-        expect(response.body.id).to.include("mca_").and.to.not.be.empty;
-        expect(response.body.status).to.equal("active");
-        expect(response.body.profile_id).to.equal(profile_id);
-        expect(
-          response.body.connector_webhook_details.merchant_secret
-        ).to.equal(mcaUpdateBody.connector_webhook_details.merchant_secret);
-
-        if (
-          merchant_connector_id === undefined ||
-          merchant_connector_id === null
-        ) {
-          globalState.set("merchantConnectorId", response.body.id);
-          cy.task("setGlobalState", globalState.data);
+        if (authDetails && authDetails.metadata) {
+          mcaUpdateBody.metadata = {
+            ...mcaUpdateBody.metadata,
+            ...authDetails.metadata,
+          };
         }
-      } else {
-        // to be updated
-        throw new Error(
-          `Merchant connector account update call failed with status ${response.status} and message: "${response.body.error.message}"`
-        );
+
+        cy.request({
+          method: "PUT",
+          url: url,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `admin-api-key=${api_key}`,
+            ...customHeaders,
+          },
+          body: mcaUpdateBody,
+          failOnStatusCode: false,
+        }).then((response) => {
+          logRequestId(response.headers["x-request-id"]);
+
+          if (response.status === 200) {
+            expect(response.body.connector_name).to.equal(connectorName);
+            expect(response.body.id).to.include("mca_").and.to.not.be.empty;
+            expect(response.body.status).to.equal("active");
+            expect(response.body.profile_id).to.equal(profile_id);
+            expect(
+              response.body.connector_webhook_details.merchant_secret
+            ).to.equal(mcaUpdateBody.connector_webhook_details.merchant_secret);
+
+            if (
+              merchant_connector_id === undefined ||
+              merchant_connector_id === null
+            ) {
+              globalState.set("merchantConnectorId", response.body.id);
+              cy.task("setGlobalState", globalState.data);
+            }
+          } else {
+            // to be updated
+            throw new Error(
+              `Merchant connector account update call failed with status ${response.status} and message: "${response.body.error.message}"`
+            );
+          }
+        });
       }
-    });
+    );
   }
 );
 
@@ -667,7 +693,7 @@ Cypress.Commands.add("apiKeyCreateCall", (apiKeyCreateBody, globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       ...customHeaders,
     },
     body: apiKeyCreateBody,
@@ -714,7 +740,7 @@ Cypress.Commands.add("apiKeyRetrieveCall", (globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       ...customHeaders,
     },
     failOnStatusCode: false,
@@ -764,7 +790,7 @@ Cypress.Commands.add("apiKeyUpdateCall", (apiKeyUpdateBody, globalState) => {
     url: url,
     headers: {
       "Content-Type": "application/json",
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       ...customHeaders,
     },
     body: apiKeyUpdateBody,
@@ -801,7 +827,7 @@ Cypress.Commands.add(
     const api_key = globalState.get("userInfoToken");
     const base_url = globalState.get("baseUrl");
     const profile_id = globalState.get("profileId");
-    const url = `${base_url}/v2/routing-algorithm`;
+    const url = `${base_url}/v2/routing-algorithms`;
 
     // Update request body
     routingSetupBody.algorithm.data = payload.data;
@@ -957,7 +983,7 @@ Cypress.Commands.add("routingRetrieveCall", (globalState) => {
   const base_url = globalState.get("baseUrl");
   const profile_id = globalState.get("profileId");
   const routing_algorithm_id = globalState.get("routingAlgorithmId");
-  const url = `${base_url}/v2/routing-algorithm/${routing_algorithm_id}`;
+  const url = `${base_url}/v2/routing-algorithms/${routing_algorithm_id}`;
 
   cy.request({
     method: "GET",
@@ -1166,13 +1192,13 @@ Cypress.Commands.add("merchantAccountsListCall", (globalState) => {
   const key_id_type = "publishable_key";
   const key_id = validateEnv(base_url, key_id_type);
   const organization_id = globalState.get("organizationId");
-  const url = `${base_url}/v2/organization/${organization_id}/merchant-accounts`;
+  const url = `${base_url}/v2/organizations/${organization_id}/merchant-accounts`;
 
   cy.request({
     method: "GET",
     url: url,
     headers: {
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       "Content-Type": "application/json",
     },
     failOnStatusCode: false,
@@ -1214,7 +1240,7 @@ Cypress.Commands.add("businessProfilesListCall", (globalState) => {
     method: "GET",
     url: url,
     headers: {
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       "Content-Type": "application/json",
       ...customHeaders,
     },
@@ -1250,13 +1276,14 @@ Cypress.Commands.add("mcaListCall", (globalState, service_type) => {
 
   const customHeaders = {
     "x-merchant-id": merchant_id,
+    "x-profile-id": profile_id,
   };
 
   cy.request({
     method: "GET",
     url: url,
     headers: {
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       "Content-Type": "application/json",
       ...customHeaders,
     },
@@ -1318,7 +1345,7 @@ Cypress.Commands.add("apiKeysListCall", (globalState) => {
     method: "GET",
     url: url,
     headers: {
-      "api-key": api_key,
+      Authorization: `admin-api-key=${api_key}`,
       "Content-Type": "application/json",
       ...customHeaders,
     },
@@ -1349,23 +1376,23 @@ Cypress.Commands.add("apiKeysListCall", (globalState) => {
 // Payment API calls
 // Update the below commands while following the conventions
 // Below is an example of how the payment intent create call should look like (update the below command as per the need)
+
 Cypress.Commands.add(
-  "paymentIntentCreateCall",
-  (
-    globalState,
-    paymentRequestBody,
-    paymentResponseBody
-    /* Add more variables based on the need*/
-  ) => {
+  "paymentVoidCall",
+  (globalState, voidRequestBody, data) => {
+    const { Request: reqData = {}, Response: resData } = data || {};
+
     // Define the necessary variables and constants at the top
-    // Also construct the URL here
     const api_key = globalState.get("apiKey");
     const base_url = globalState.get("baseUrl");
     const profile_id = globalState.get("profileId");
-    const url = `${base_url}/v2/payments/create-intent`;
+    const payment_id = globalState.get("paymentID");
+    const url = `${base_url}/v2/payments/${payment_id}/cancel`;
 
-    // Update request body if needed
-    paymentRequestBody = {};
+    // Apply connector-specific request data (including cancellation_reason)
+    for (const key in reqData) {
+      voidRequestBody[key] = reqData[key];
+    }
 
     // Pass Custom Headers
     const customHeaders = {
@@ -1376,7 +1403,59 @@ Cypress.Commands.add(
       method: "POST",
       url: url,
       headers: {
-        "api-key": api_key,
+        Authorization: `api-key=${api_key}`,
+        "Content-Type": "application/json",
+        ...customHeaders,
+      },
+      body: voidRequestBody,
+      failOnStatusCode: false,
+    }).then((response) => {
+      // Logging x-request-id is mandatory
+      logRequestId(response.headers["x-request-id"]);
+
+      cy.wrap(response).then(() => {
+        expect(response.headers["content-type"]).to.include("application/json");
+        if (response.status === 200) {
+          for (const key in resData.body) {
+            expect(resData.body[key]).to.equal(response.body[key]);
+          }
+        } else {
+          defaultErrorHandler(response, resData);
+        }
+      });
+    });
+  }
+);
+Cypress.Commands.add(
+  "paymentIntentCreateCall",
+  (
+    globalState,
+    paymentRequestBody,
+    paymentResponseBody,
+    authentication_type,
+    capture_method
+  ) => {
+    // Define the necessary variables and constants at the top
+    // Also construct the URL here
+    const api_key = globalState.get("apiKey");
+    const base_url = globalState.get("baseUrl");
+    const profile_id = globalState.get("profileId");
+    const url = `${base_url}/v2/payments/create-intent`;
+
+    // Set capture_method and authentication_type as parameters (like V1)
+    paymentRequestBody.authentication_type = authentication_type;
+    paymentRequestBody.capture_method = capture_method;
+
+    // Pass Custom Headers
+    const customHeaders = {
+      "x-profile-id": profile_id,
+    };
+
+    cy.request({
+      method: "POST",
+      url: url,
+      headers: {
+        Authorization: `api-key=${api_key}`,
         "Content-Type": "application/json",
         ...customHeaders,
       },
@@ -1386,28 +1465,113 @@ Cypress.Commands.add(
       // Logging x-request-id is mandatory
       logRequestId(response.headers["x-request-id"]);
 
-      if (response.status === 200) {
-        // Update the assertions based on the need
-        expect(response.body).to.deep.equal(paymentResponseBody);
-      } else if (response.status === 400) {
-        // Add 4xx validations here
-        expect(response.body).to.deep.equal(paymentResponseBody);
-      } else if (response.status === 500) {
-        // Add 5xx validations here
-        expect(response.body).to.deep.equal(paymentResponseBody);
-      } else {
-        // If status code is other than the ones mentioned above, default should be thrown
-        throw new Error(
-          `Payment intent create call failed with status ${response.status} and message: "${response.body.error.message}"`
-        );
-      }
+      cy.wrap(response).then(() => {
+        expect(response.headers["content-type"]).to.include("application/json");
+        if (response.status === 200) {
+          // Validate the payment create response - V2 uses different ID format
+          expect(response.body).to.have.property("id").and.to.be.a("string").and
+            .not.be.empty;
+          expect(response.body).to.have.property("status");
+
+          // Store the payment ID for future use
+          globalState.set("paymentID", response.body.id);
+
+          // Log payment creation success
+          cy.task(
+            "cli_log",
+            `Payment created with ID: ${response.body.id}, Status: ${response.body.status}`
+          );
+
+          if (paymentResponseBody && paymentResponseBody.body) {
+            for (const key in paymentResponseBody.body) {
+              if (paymentResponseBody.body[key] !== null) {
+                expect(response.body[key]).to.equal(
+                  paymentResponseBody.body[key]
+                );
+              }
+            }
+          }
+        } else {
+          defaultErrorHandler(response, paymentResponseBody);
+        }
+      });
     });
   }
 );
-Cypress.Commands.add("paymentIntentConfirmCall", (globalState) => {});
-Cypress.Commands.add("paymentIntentRetrieveCall", (globalState) => {});
+Cypress.Commands.add(
+  "paymentConfirmCall",
+  (globalState, paymentConfirmRequestBody, data) => {
+    const { Request: reqData = {}, Response: resData } = data || {};
 
-// templates for future use
-Cypress.Commands.add("", () => {
-  cy.request({}).then((response) => {});
-});
+    // Define the necessary variables and constants at the top
+    const api_key = globalState.get("apiKey");
+    const base_url = globalState.get("baseUrl");
+    const profile_id = globalState.get("profileId");
+    const payment_id = globalState.get("paymentID");
+    const url = `${base_url}/v2/payments/${payment_id}/confirm-intent`;
+
+    // Apply connector-specific request data
+    for (const key in reqData) {
+      paymentConfirmRequestBody[key] = reqData[key];
+    }
+
+    // Pass Custom Headers
+    const customHeaders = {
+      "x-profile-id": profile_id,
+    };
+
+    cy.request({
+      method: "POST",
+      url: url,
+      headers: {
+        Authorization: `api-key=${api_key}`,
+        "Content-Type": "application/json",
+        ...customHeaders,
+      },
+      body: paymentConfirmRequestBody,
+      failOnStatusCode: false,
+    }).then((response) => {
+      // Logging x-request-id is mandatory
+      logRequestId(response.headers["x-request-id"]);
+
+      cy.wrap(response).then(() => {
+        expect(response.headers["content-type"]).to.include("application/json");
+        if (response.status === 200) {
+          // Validate the payment confirm response
+          expect(response.body).to.have.property("id").and.to.be.a("string").and
+            .not.be.empty;
+          expect(response.body).to.have.property("status");
+
+          globalState.set("paymentID", response.body.id);
+
+          // Validate response body against expected data
+          if (resData && resData.body) {
+            for (const key in resData.body) {
+              // Skip validation if expected value is null or undefined
+              if (resData.body[key] == null) {
+                continue;
+              }
+              // Only validate if the field exists in the response and has a non-null value
+              if (
+                response.body.hasOwnProperty(key) &&
+                response.body[key] != null
+              ) {
+                // Use deep equal for object comparison, regular equal for primitives
+                if (
+                  typeof resData.body[key] === "object" &&
+                  typeof response.body[key] === "object"
+                ) {
+                  expect(response.body[key]).to.deep.equal(resData.body[key]);
+                } else {
+                  expect(response.body[key]).to.equal(resData.body[key]);
+                }
+              }
+            }
+          }
+        } else {
+          defaultErrorHandler(response, resData);
+        }
+      });
+    });
+  }
+);

@@ -1,32 +1,29 @@
 use api_models::payments as api_payments;
 use common_enums::enums;
+use common_types::payments as common_payments_types;
 use common_utils::errors::CustomResult;
 use diesel_models::Mandate;
 use error_stack::ResultExt;
 use hyperswitch_domain_models::mandates::MandateData;
 
-use crate::{
-    core::{errors, payments},
-    routes::SessionState,
-    types::{api, domain},
-};
+use crate::{core::errors, types::api};
+#[cfg(feature = "v1")]
+use crate::{core::payments, routes::SessionState, types::domain};
 
 #[cfg(feature = "v1")]
 pub async fn get_profile_id_for_mandate(
     state: &SessionState,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    platform: &domain::Platform,
     mandate: Mandate,
 ) -> CustomResult<common_utils::id_type::ProfileId, errors::ApiErrorResponse> {
     let profile_id = if let Some(ref payment_id) = mandate.original_payment_id {
         let pi = state
             .store
-            .find_payment_intent_by_payment_id_merchant_id(
-                &state.into(),
+            .find_payment_intent_by_payment_id_processor_merchant_id(
                 payment_id,
-                merchant_account.get_id(),
-                key_store,
-                merchant_account.storage_scheme,
+                platform.get_processor().get_account().get_id(),
+                platform.get_processor().get_key_store(),
+                platform.get_processor().get_account().storage_scheme,
             )
             .await
             .change_context(errors::ApiErrorResponse::PaymentNotFound)?;
@@ -50,7 +47,7 @@ pub fn get_mandate_type(
     mandate_data: Option<api_payments::MandateData>,
     off_session: Option<bool>,
     setup_future_usage: Option<enums::FutureUsage>,
-    customer_acceptance: Option<api_payments::CustomerAcceptance>,
+    customer_acceptance: Option<common_payments_types::CustomerAcceptance>,
     token: Option<String>,
     payment_method: Option<enums::PaymentMethod>,
 ) -> CustomResult<Option<api::MandateTransactionType>, errors::ValidationError> {
@@ -86,6 +83,7 @@ pub fn get_mandate_type(
         _ => Ok(None),
     }
 }
+#[cfg(feature = "v1")]
 #[derive(Clone)]
 pub struct MandateGenericData {
     pub token: Option<String>,

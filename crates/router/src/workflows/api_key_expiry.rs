@@ -1,4 +1,4 @@
-use common_utils::{errors::ValidationError, ext_traits::ValueExt, types::theme::ThemeLineage};
+use common_utils::{errors::ValidationError, ext_traits::ValueExt, types::user::ThemeLineage};
 use diesel_models::{
     enums as storage_enums, process_tracker::business_status, ApiKeyExpiryTrackingData,
 };
@@ -9,9 +9,12 @@ use crate::{
     consts, errors,
     logger::error,
     routes::{metrics, SessionState},
-    services::email::types::{self as email_types, ApiKeyExpiryReminder},
+    services::email::types::ApiKeyExpiryReminder,
     types::{api, domain::UserEmail, storage},
-    utils::{user::theme as theme_utils, OptionExt},
+    utils::{
+        user::{self as user_utils, theme as theme_utils},
+        OptionExt,
+    },
 };
 
 pub struct ApiKeyExpiryWorkflow;
@@ -28,22 +31,16 @@ impl ProcessTrackerWorkflow<SessionState> for ApiKeyExpiryWorkflow {
             .tracking_data
             .clone()
             .parse_value("ApiKeyExpiryTrackingData")?;
-        let key_manager_satte = &state.into();
         let key_store = state
             .store
             .get_merchant_key_store_by_merchant_id(
-                key_manager_satte,
                 &tracking_data.merchant_id,
                 &state.store.get_master_key().to_vec().into(),
             )
             .await?;
 
         let merchant_account = db
-            .find_merchant_account_by_merchant_id(
-                key_manager_satte,
-                &tracking_data.merchant_id,
-                &key_store,
-            )
+            .find_merchant_account_by_merchant_id(&tracking_data.merchant_id, &key_store)
             .await?;
 
         let email_id = merchant_account
@@ -53,7 +50,7 @@ impl ProcessTrackerWorkflow<SessionState> for ApiKeyExpiryWorkflow {
             .primary_email
             .ok_or(errors::ProcessTrackerError::EValidationError(
                 ValidationError::MissingRequiredField {
-                    field_name: "email".to_string(),
+                    field_name: "email".into(),
                 }
                 .into(),
             ))?;
@@ -110,7 +107,7 @@ impl ProcessTrackerWorkflow<SessionState> for ApiKeyExpiryWorkflow {
             .email_client
             .clone()
             .compose_and_send_email(
-                email_types::get_base_url(state),
+                user_utils::get_base_url(state),
                 Box::new(email_contents),
                 state.conf.proxy.https_url.as_ref(),
             )

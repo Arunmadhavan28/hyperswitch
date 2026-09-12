@@ -21,6 +21,7 @@ pub enum AnalyticsDomain {
     SdkEvents,
     ApiEvents,
     Dispute,
+    Routing,
 }
 
 #[derive(Debug, strum::AsRefStr, strum::Display, Clone, Copy)]
@@ -33,15 +34,21 @@ pub enum AnalyticsCollection {
     SdkEvents,
     SdkEventsAnalytics,
     ApiEvents,
+    ApiPayoutEvents,
     PaymentIntent,
     PaymentIntentSessionized,
     ConnectorEvents,
+    ConnectorPayoutEvents,
+    PrismConnectorEvents,
+    PrismConnectorPayoutEvents,
     OutgoingWebhookEvent,
+    OutgoingWebhookPayoutEvent,
     Authentications,
     Dispute,
     DisputeSessionized,
     ApiEventsAnalytics,
     ActivePaymentsAnalytics,
+    RoutingEvents,
 }
 
 #[allow(dead_code)]

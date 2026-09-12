@@ -39,7 +39,9 @@ pub async fn card_iin_info(
         card_iin,
     };
 
-    let (auth, _) = match auth::check_client_secret_and_get_auth(req.headers(), &payload) {
+    let api_auth = auth::ApiKeyAuth::default();
+
+    let (auth, _) = match auth::check_sdk_auth_and_get_auth(req.headers(), &payload, api_auth) {
         Ok((auth, _auth_flow)) => (auth, _auth_flow),
         Err(e) => return api::log_and_return_error_response(e),
     };
@@ -49,8 +51,12 @@ pub async fn card_iin_info(
         state,
         &req,
         payload,
-        |state, auth, req, _| {
-            cards_info::retrieve_card_info(state, auth.merchant_account, auth.key_store, req)
+        |state, auth, mut req, _| {
+            if let Some(client_secret) = auth.client_secret {
+                req.client_secret = Some(client_secret);
+            }
+
+            cards_info::retrieve_card_info(state, auth.platform, req)
         },
         &*auth,
         api_locking::LockAction::NotApplicable,
@@ -98,10 +104,7 @@ pub async fn update_cards_info(
     .await
 }
 
-#[cfg(all(
-    any(feature = "v1", feature = "v2", feature = "olap", feature = "oltp"),
-    not(feature = "customer_v2")
-))]
+#[cfg(all(feature = "v1", any(feature = "olap", feature = "oltp")))]
 #[instrument(skip_all, fields(flow = ?Flow::CardsInfoMigrate))]
 pub async fn migrate_cards_info(
     state: web::Data<AppState>,

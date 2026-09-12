@@ -6,6 +6,20 @@ const successfulNo3DSCardDetails = {
   card_cvc: "737",
 };
 
+const billingAddress = {
+  address: {
+    line1: "1467",
+    line2: "Harrison Street",
+    line3: "Harrison Street",
+    city: "San Fransico",
+    state: "California",
+    zip: "94122",
+    country: "IN",
+    first_name: "john",
+    last_name: "doe",
+  },
+};
+
 export const connectorDetails = {
   bank_redirect_pm: {
     Ideal: {
@@ -37,6 +51,75 @@ export const connectorDetails = {
           status: "failed",
           error_code: "BAD_REQUEST",
           error_message: "Payment country has to be enabled on merchant",
+        },
+      },
+    },
+  },
+  real_time_payment_pm: {
+    PaymentIntent: {
+      Configs: {
+        CONNECTOR_CREDENTIAL: {
+          specName: ["realTimePayment"],
+          value: "connector_2",
+        },
+      },
+      Request: {
+        currency: "MYR",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    DuitNow: {
+      Configs: {
+        CONNECTOR_CREDENTIAL: {
+          specName: ["realTimePayment"],
+          value: "connector_2",
+        },
+      },
+      Request: {
+        payment_method: "real_time_payment",
+        payment_method_type: "duit_now",
+        payment_method_data: {
+          real_time_payment: {
+            duit_now: {},
+          },
+        },
+        billing: {
+          ...billingAddress,
+          address: {
+            ...billingAddress.address,
+            country: "MY",
+          },
+        },
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_customer_action",
+          net_amount: 6000,
+          amount_received: null,
+          amount: 6000,
+        },
+      },
+    },
+    DuitNowRetrieve: {
+      Configs: {
+        CONNECTOR_CREDENTIAL: {
+          specName: ["realTimePayment"],
+          value: "connector_2",
+        },
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+          amount: 6000,
+          amount_received: 6000,
+          amount_capturable: 0,
         },
       },
     },
@@ -133,6 +216,7 @@ export const connectorDetails = {
             },
           },
         },
+        billing: billingAddress,
       },
       Response: {
         status: 200,

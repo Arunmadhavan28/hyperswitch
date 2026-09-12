@@ -1,9 +1,8 @@
-use std::{collections::HashMap, fmt, ops::Deref, str::FromStr};
+use std::{collections::HashMap, fmt, ops::Deref, str::FromStr, sync::LazyLock};
 
 use common_utils::errors::ValidationError;
 use error_stack::report;
-use masking::{PeekInterface, Strategy, StrongSecret, WithType};
-use once_cell::sync::Lazy;
+use hyperswitch_masking::{PeekInterface, Strategy, StrongSecret, WithType};
 use regex::Regex;
 #[cfg(not(target_arch = "wasm32"))]
 use router_env::{logger, which as router_env_which, Env};
@@ -15,6 +14,13 @@ pub const MIN_CARD_NUMBER_LENGTH: usize = 8;
 
 /// Maximum limit of a card number will not exceed 19 by ISO standards
 pub const MAX_CARD_NUMBER_LENGTH: usize = 19;
+
+/// Narrowest card number prefix that may be blocklisted
+pub const MIN_CARD_BIN_LENGTH: usize = 6;
+
+/// Widest card number prefix that may be blocklisted. Bounded well short of a full card number
+/// because blocklist prefixes are stored in plaintext, unlike vault-hashed card numbers.
+pub const MAX_CARD_BIN_LENGTH: usize = 10;
 
 #[derive(Debug, Deserialize, Serialize, Error)]
 #[error("{0}")]
@@ -28,13 +34,68 @@ pub struct CardNumber(StrongSecret<String, CardNumberStrategy>);
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct NetworkToken(StrongSecret<String, CardNumberStrategy>);
 
-impl CardNumber {
+/// Card BIN — the leading 6 to 10 digits of a card number. Not a full PAN, so it is
+/// stored and serialized in plain text (matching how BIN blocklist entries are stored).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct CardBin(String);
+
+impl CardBin {
+    /// The 6-digit ISIN prefix of the BIN
     pub fn get_card_isin(&self) -> String {
-        self.0.peek().chars().take(6).collect::<String>()
+        self.0.chars().take(6).collect()
+    }
+
+    /// Every blocklist-relevant prefix derivable from this BIN: lengths
+    /// [`MIN_CARD_BIN_LENGTH`] up to the number of digits actually provided
+    /// (capped at [`MAX_CARD_BIN_LENGTH`]).
+    pub fn get_blocklist_bin_prefixes(&self) -> Vec<String> {
+        (MIN_CARD_BIN_LENGTH..=self.0.len().min(MAX_CARD_BIN_LENGTH))
+            .map(|len| self.0.chars().take(len).collect())
+            .collect()
+    }
+}
+
+impl FromStr for CardBin {
+    type Err = CardNumberValidationErr;
+
+    fn from_str(card_bin: &str) -> Result<Self, Self::Err> {
+        let is_valid = (MIN_CARD_BIN_LENGTH..=MAX_CARD_BIN_LENGTH).contains(&card_bin.len())
+            && card_bin.chars().all(|character| character.is_ascii_digit());
+
+        if is_valid {
+            Ok(Self(card_bin.to_string()))
+        } else {
+            Err(CardNumberValidationErr(
+                "card_bin must be the leading 6 to 10 digits of the card number",
+            ))
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CardBin {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl CardNumber {
+    fn get_bin_prefix(&self, len: usize) -> String {
+        self.0.peek().chars().take(len).collect::<String>()
+    }
+
+    pub fn get_card_isin(&self) -> String {
+        self.get_bin_prefix(6)
     }
 
     pub fn get_extended_card_bin(&self) -> String {
-        self.0.peek().chars().take(8).collect::<String>()
+        self.get_bin_prefix(8)
+    }
+
+    pub fn get_blocklist_bin_prefixes(&self) -> Vec<String> {
+        (MIN_CARD_BIN_LENGTH..=MAX_CARD_BIN_LENGTH)
+            .map(|len| self.get_bin_prefix(len))
+            .collect()
     }
     pub fn get_card_no(&self) -> String {
         self.0.peek().chars().collect::<String>()
@@ -52,8 +113,8 @@ impl CardNumber {
     }
     pub fn is_cobadged_card(&self) -> Result<bool, error_stack::Report<ValidationError>> {
         /// Regex to identify card networks
-        static CARD_NETWORK_REGEX: Lazy<HashMap<&str, Result<Regex, regex::Error>>> = Lazy::new(
-            || {
+        static CARD_NETWORK_REGEX: LazyLock<HashMap<&str, Result<Regex, regex::Error>>> =
+            LazyLock::new(|| {
                 let mut map = HashMap::new();
                 map.insert(
                     "Mastercard",
@@ -82,12 +143,11 @@ impl CardNumber {
                 map.insert("BAJAJ", Regex::new(r"^(203040)"));
                 map.insert("CartesBancaires", Regex::new(r"^(401(005|006|581)|4021(01|02)|403550|405936|406572|41(3849|4819|50(56|59|62|71|74)|6286|65(37|79)|71[7])|420110|423460|43(47(21|22)|50(48|49|50|51|52)|7875|95(09|11|15|39|98)|96(03|18|19|20|22|72))|4424(48|49|50|51|52|57)|448412|4505(19|60)|45(33|56[6-8]|61|62[^3]|6955|7452|7717|93[02379])|46(099|54(76|77)|6258|6575|98[023])|47(4107|71(73|74|86)|72(65|93)|9619)|48(1091|3622|6519)|49(7|83[5-9]|90(0[1-6]|1[0-6]|2[0-3]|3[0-3]|4[0-3]|5[0-2]|68|9[256789]))|5075(89|90|93|94|97)|51(0726|3([0-7]|8[56]|9(00|38))|5214|62(07|36)|72(22|43)|73(65|66)|7502|7647|8101|9920)|52(0993|1662|3718|7429|9227|93(13|14|31)|94(14|21|30|40|47|55|56|[6-9])|9542)|53(0901|10(28|30)|1195|23(4[4-7])|2459|25(09|34|54|56)|3801|41(02|05|11)|50(29|66)|5324|61(07|15)|71(06|12)|8011)|54(2848|5157|9538|98(5[89]))|55(39(79|93)|42(05|60)|4965|7008|88(67|82)|89(29|4[23])|9618|98(09|10))|56(0408|12(0[2-6]|4[134]|5[04678]))|58(17(0[0-7]|15|2[14]|3[16789]|4[0-9]|5[016]|6[269]|7[3789]|8[0-7]|9[017])|55(0[2-5]|7[7-9]|8[0-2])))"));
                 map
-            },
-        );
+            });
         let mut no_of_supported_card_networks = 0;
 
         let card_number_str = self.get_card_no();
-        for (_, regex) in CARD_NETWORK_REGEX.iter() {
+        for regex in CARD_NETWORK_REGEX.values() {
             let card_regex = match regex.as_ref() {
                 Ok(regex) => Ok(regex),
                 Err(_) => Err(report!(ValidationError::InvalidValue {
@@ -103,6 +163,10 @@ impl CardNumber {
             }
         }
         Ok(no_of_supported_card_networks > 1)
+    }
+
+    pub fn to_network_token(&self) -> NetworkToken {
+        NetworkToken(self.0.clone())
     }
 }
 
@@ -143,7 +207,7 @@ impl FromStr for CardNumber {
         ];
         #[cfg(not(target_arch = "wasm32"))]
         let valid_test_cards = match router_env_which() {
-            Env::Development | Env::Sandbox => valid_test_cards,
+            Env::Development | Env::Sandbox | Env::Integ => valid_test_cards,
             Env::Production => vec![],
         };
 
@@ -172,7 +236,7 @@ impl FromStr for NetworkToken {
         ];
         #[cfg(not(target_arch = "wasm32"))]
         let valid_test_network_tokens = match router_env_which() {
-            Env::Development | Env::Sandbox => valid_test_network_tokens,
+            Env::Development | Env::Sandbox | Env::Integ => valid_test_network_tokens,
             Env::Production => vec![],
         };
 
@@ -199,7 +263,7 @@ pub fn sanitize_card_number(card_number: &str) -> Result<bool, CardNumberValidat
 
 /// # Panics
 ///
-/// Never, as a single character will never be greater than 10, or `u8`
+/// Never, as a single decimal digit will never be greater than 10, or `u8`
 pub fn validate_card_number_chars(number: &str) -> Result<Vec<u8>, CardNumberValidationErr> {
     let data = number.chars().try_fold(
         Vec::with_capacity(MAX_CARD_NUMBER_LENGTH),
@@ -212,7 +276,7 @@ pub fn validate_card_number_chars(number: &str) -> Result<Vec<u8>, CardNumberVal
                         "invalid character found in card number",
                     ))?
                     .try_into()
-                    .expect("error while converting a single character to u8"), // safety, a single character will never be greater `u8`
+                    .expect("error while converting a single decimal digit to u8"), // safety, a single decimal digit will never be greater `u8`
             );
             Ok::<Vec<u8>, CardNumberValidationErr>(data)
         },
@@ -276,6 +340,18 @@ impl Deref for NetworkToken {
     }
 }
 
+impl From<NetworkToken> for CardNumber {
+    fn from(network_token: NetworkToken) -> Self {
+        Self(network_token.0)
+    }
+}
+
+impl From<CardNumber> for NetworkToken {
+    fn from(card_number: CardNumber) -> Self {
+        Self(card_number.0)
+    }
+}
+
 impl<'de> Deserialize<'de> for CardNumber {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
@@ -315,9 +391,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use masking::Secret;
+    use hyperswitch_masking::Secret;
 
     use super::*;
 
@@ -361,7 +435,7 @@ mod tests {
     fn card_number_no_whitespace() {
         let s = "3714    4963  5398 431";
         assert_eq!(
-            CardNumber::from_str(s).unwrap().to_string(),
+            format!("{:?}", CardNumber::from_str(s).unwrap().0),
             "371449*********"
         );
     }
@@ -389,8 +463,10 @@ mod tests {
     #[test]
     fn test_valid_card_number_deserialization() {
         let card_number = serde_json::from_str::<CardNumber>(r#""3714 4963 5398 431""#).unwrap();
-        let secret = card_number.to_string();
-        assert_eq!(r#""371449*********""#, format!("{secret:?}"));
+        assert_eq!(
+            r#""371449*********""#,
+            format!("{:?}", card_number.get_card_no())
+        );
     }
 
     #[test]

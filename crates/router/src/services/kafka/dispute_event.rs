@@ -1,6 +1,9 @@
-use common_utils::ext_traits::StringExt;
+use common_utils::{
+    ext_traits::StringExt,
+    types::{AmountConvertor, CreatedBy, MinorUnit, StringMinorUnitForConnector},
+};
 use diesel_models::enums as storage_enums;
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use time::OffsetDateTime;
 
 use crate::types::storage::dispute::Dispute;
@@ -9,7 +12,7 @@ use crate::types::storage::dispute::Dispute;
 #[derive(serde::Serialize, Debug)]
 pub struct KafkaDisputeEvent<'a> {
     pub dispute_id: &'a String,
-    pub dispute_amount: i64,
+    pub dispute_amount: MinorUnit,
     pub currency: storage_enums::Currency,
     pub dispute_stage: &'a storage_enums::DisputeStage,
     pub dispute_status: &'a storage_enums::DisputeStatus,
@@ -26,29 +29,40 @@ pub struct KafkaDisputeEvent<'a> {
     pub connector_created_at: Option<OffsetDateTime>,
     #[serde(default, with = "time::serde::timestamp::nanoseconds::option")]
     pub connector_updated_at: Option<OffsetDateTime>,
-    #[serde(default, with = "time::serde::timestamp::nanoseconds")]
+    #[serde(with = "time::serde::timestamp::nanoseconds")]
     pub created_at: OffsetDateTime,
-    #[serde(default, with = "time::serde::timestamp::nanoseconds")]
+    #[serde(with = "time::serde::timestamp::nanoseconds")]
     pub modified_at: OffsetDateTime,
     pub connector: &'a String,
     pub evidence: &'a Secret<serde_json::Value>,
     pub profile_id: Option<&'a common_utils::id_type::ProfileId>,
     pub merchant_connector_id: Option<&'a common_utils::id_type::MerchantConnectorAccountId>,
     pub organization_id: &'a common_utils::id_type::OrganizationId,
+    pub processor_merchant_id: Option<&'a common_utils::id_type::MerchantId>,
+    pub created_by: Option<CreatedBy>,
 }
 
 impl<'a> KafkaDisputeEvent<'a> {
     pub fn from_storage(dispute: &'a Dispute) -> Self {
+        let currency = dispute.dispute_currency.unwrap_or(
+            dispute
+                .currency
+                .to_uppercase()
+                .parse_enum("Currency")
+                .unwrap_or_default(),
+        );
         Self {
             dispute_id: &dispute.dispute_id,
-            dispute_amount: dispute.amount.parse::<i64>().unwrap_or_default(),
-            currency: dispute.dispute_currency.unwrap_or(
-                dispute
-                    .currency
-                    .to_uppercase()
-                    .parse_enum("Currency")
-                    .unwrap_or_default(),
-            ),
+            dispute_amount: StringMinorUnitForConnector::convert_back(
+                &StringMinorUnitForConnector,
+                dispute.amount.clone(),
+                currency,
+            )
+            .unwrap_or_else(|e| {
+                router_env::logger::error!("Failed to convert dispute amount: {e:?}");
+                MinorUnit::new(0)
+            }),
+            currency,
             dispute_stage: &dispute.dispute_stage,
             dispute_status: &dispute.dispute_status,
             payment_id: &dispute.payment_id,
@@ -68,6 +82,11 @@ impl<'a> KafkaDisputeEvent<'a> {
             profile_id: dispute.profile_id.as_ref(),
             merchant_connector_id: dispute.merchant_connector_id.as_ref(),
             organization_id: &dispute.organization_id,
+            processor_merchant_id: dispute.processor_merchant_id.as_ref(),
+            created_by: dispute
+                .created_by
+                .as_ref()
+                .and_then(|created_by| created_by.parse::<CreatedBy>().ok()),
         }
     }
 }

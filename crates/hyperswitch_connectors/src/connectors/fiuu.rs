@@ -1,10 +1,6 @@
 pub mod transformers;
 
-use std::{
-    any::type_name,
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-};
+use std::{any::type_name, borrow::Cow, collections::HashMap, sync::LazyLock};
 
 use common_enums::{CaptureMethod, PaymentMethod, PaymentMethodType};
 use common_utils::{
@@ -16,7 +12,6 @@ use common_utils::{
 };
 use error_stack::ResultExt;
 use hyperswitch_domain_models::{
-    payment_method_data::PaymentMethodData,
     router_data::{AccessToken, ErrorResponse, RouterData},
     router_flow_types::{
         access_token_auth::AccessTokenAuth,
@@ -28,7 +23,10 @@ use hyperswitch_domain_models::{
         PaymentsCancelData, PaymentsCaptureData, PaymentsSessionData, PaymentsSyncData,
         RefundsData, SetupMandateRequestData,
     },
-    router_response_types::{PaymentsResponseData, RefundsResponseData},
+    router_response_types::{
+        ConnectorInfo, PaymentMethodDetails, PaymentsResponseData, RefundsResponseData,
+        SupportedPaymentMethods, SupportedPaymentMethodsExt,
+    },
     types::{
         PaymentsAuthorizeRouterData, PaymentsCancelRouterData, PaymentsCaptureRouterData,
         PaymentsSyncRouterData, RefundSyncRouterData, RefundsRouterData,
@@ -40,12 +38,13 @@ use hyperswitch_interfaces::{
         ConnectorValidation,
     },
     configs::Connectors,
+    consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     errors,
     events::connector_api_logs::ConnectorEvent,
     types::{self, Response},
     webhooks,
 };
-use masking::{ExposeInterface, PeekInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, PeekInterface, Secret};
 use reqwest::multipart::Form;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -54,7 +53,7 @@ use transformers::{self as fiuu, ExtraParameters, FiuuWebhooksResponse};
 use crate::{
     constants::headers,
     types::ResponseRouterData,
-    utils::{self, PaymentMethodDataType},
+    utils::{self},
 };
 
 pub fn parse_and_log_keys_in_url_encoded_response<T>(data: &[u8]) {
@@ -193,7 +192,8 @@ where
         &self,
         _req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let header = vec![(
             headers::CONTENT_TYPE.to_string(),
             self.get_content_type().to_string().into(),
@@ -220,27 +220,60 @@ impl ConnectorCommon for Fiuu {
         res: Response,
         event_builder: Option<&mut ConnectorEvent>,
     ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
-        let response: fiuu::FiuuErrorResponse = res
-            .response
-            .parse_struct("FiuuErrorResponse")
-            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        if res.response.is_empty() {
+            return Ok(ErrorResponse {
+                status_code: res.status_code,
+                code: NO_ERROR_CODE.to_string(),
+                message: NO_ERROR_MESSAGE.to_string(),
+                reason: None,
+                attempt_status: None,
+                connector_transaction_id: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
+            });
+        }
 
-        event_builder.map(|i| i.set_response_body(&response));
-        router_env::logger::info!(connector_response=?response);
+        let response: Result<fiuu::FiuuErrorResponse, _> =
+            res.response.parse_struct("FiuuErrorResponse");
 
-        Ok(ErrorResponse {
-            status_code: res.status_code,
-            code: response.error_code.clone(),
-            message: response.error_desc.clone(),
-            reason: Some(response.error_desc.clone()),
-            attempt_status: None,
-            connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
-        })
+        match response {
+            Ok(response) => {
+                event_builder.map(|i| i.set_response_body(&response));
+                router_env::logger::info!(connector_response=?response);
+
+                Ok(ErrorResponse {
+                    status_code: res.status_code,
+                    code: response.error_code.clone(),
+                    message: response.error_desc.clone(),
+                    reason: Some(response.error_desc.clone()),
+                    attempt_status: None,
+                    connector_transaction_id: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
+                })
+            }
+            Err(error_msg) => {
+                if let Some(event) = event_builder {
+                    event.set_error(serde_json::json!({
+                        "error": "Error response parsing failed",
+                        "status_code": res.status_code
+                    }));
+                }
+                router_env::logger::error!(deserialization_error =? error_msg);
+                utils::handle_json_response_deserialization_failure(res, "fiuu")
+            }
+        }
     }
 }
-pub fn build_form_from_struct<T: Serialize>(data: T) -> Result<Form, common_errors::ParsingError> {
+pub fn build_form_from_struct<T: Serialize + Send + 'static>(
+    data: T,
+) -> Result<RequestContent, common_errors::ParsingError> {
     let mut form = Form::new();
     let serialized = serde_json::to_value(&data).map_err(|e| {
         router_env::logger::error!("Error serializing data to JSON value: {:?}", e);
@@ -262,36 +295,10 @@ pub fn build_form_from_struct<T: Serialize>(data: T) -> Result<Form, common_erro
         };
         form = form.text(key.clone(), value.clone());
     }
-    Ok(form)
+    Ok(RequestContent::FormData((form, Box::new(data))))
 }
 
-impl ConnectorValidation for Fiuu {
-    fn validate_connector_against_payment_request(
-        &self,
-        capture_method: Option<CaptureMethod>,
-        _payment_method: PaymentMethod,
-        _pmt: Option<PaymentMethodType>,
-    ) -> CustomResult<(), errors::ConnectorError> {
-        let capture_method = capture_method.unwrap_or_default();
-        match capture_method {
-            CaptureMethod::Automatic
-            | CaptureMethod::Manual
-            | CaptureMethod::SequentialAutomatic => Ok(()),
-            CaptureMethod::ManualMultiple | CaptureMethod::Scheduled => Err(
-                utils::construct_not_implemented_error_report(capture_method, self.id()),
-            ),
-        }
-    }
-    fn validate_mandate_payment(
-        &self,
-        pm_type: Option<PaymentMethodType>,
-        pm_data: PaymentMethodData,
-    ) -> CustomResult<(), errors::ConnectorError> {
-        let mandate_supported_pmd: HashSet<PaymentMethodDataType> =
-            HashSet::from([PaymentMethodDataType::Card]);
-        utils::is_mandate_supported(pm_data, pm_type, mandate_supported_pmd, self.id())
-    }
-}
+impl ConnectorValidation for Fiuu {}
 
 impl ConnectorIntegration<Session, PaymentsSessionData, PaymentsResponseData> for Fiuu {
     //TODO: implement sessions flow
@@ -306,7 +313,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -355,19 +363,18 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
             .as_ref()
             .map(|mandate_id| mandate_id.is_network_transaction_id_flow());
 
-        let connector_req = match (optional_is_mit_flow, optional_is_nti_flow) {
+        match (optional_is_mit_flow, optional_is_nti_flow) {
             (Some(true), Some(false)) => {
                 let recurring_request = fiuu::FiuuMandateRequest::try_from(&connector_router_data)?;
                 build_form_from_struct(recurring_request)
-                    .change_context(errors::ConnectorError::ParsingFailed)?
+                    .change_context(errors::ConnectorError::ParsingFailed)
             }
             _ => {
                 let payment_request = fiuu::FiuuPaymentRequest::try_from(&connector_router_data)?;
                 build_form_from_struct(payment_request)
-                    .change_context(errors::ConnectorError::ParsingFailed)?
+                    .change_context(errors::ConnectorError::ParsingFailed)
             }
-        };
-        Ok(RequestContent::FormData(connector_req))
+        }
     }
 
     fn build_request(
@@ -422,7 +429,8 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Fiu
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
     fn get_url(
@@ -431,7 +439,7 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Fiu
         connectors: &Connectors,
     ) -> CustomResult<String, errors::ConnectorError> {
         let base_url = connectors.fiuu.secondary_base_url.clone();
-        Ok(format!("{}RMS/API/gate-query/index.php", base_url))
+        Ok(format!("{base_url}RMS/API/gate-query/index.php"))
     }
     fn get_request_body(
         &self,
@@ -439,9 +447,7 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Fiu
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
         let sync_request = fiuu::FiuuPaymentSyncRequest::try_from(req)?;
-        let connector_req = build_form_from_struct(sync_request)
-            .change_context(errors::ConnectorError::ParsingFailed)?;
-        Ok(RequestContent::FormData(connector_req))
+        build_form_from_struct(sync_request).change_context(errors::ConnectorError::ParsingFailed)
     }
 
     fn build_request(
@@ -523,7 +529,7 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         connectors: &Connectors,
     ) -> CustomResult<String, errors::ConnectorError> {
         let base_url = connectors.fiuu.secondary_base_url.clone();
-        Ok(format!("{}RMS/API/capstxn/index.php", base_url))
+        Ok(format!("{base_url}RMS/API/capstxn/index.php"))
     }
 
     fn get_request_body(
@@ -538,11 +544,10 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         )?;
 
         let connector_router_data = fiuu::FiuuRouterData::from((amount, req));
-        let connector_req = build_form_from_struct(fiuu::PaymentCaptureRequest::try_from(
+        build_form_from_struct(fiuu::PaymentCaptureRequest::try_from(
             &connector_router_data,
         )?)
-        .change_context(errors::ConnectorError::ParsingFailed)?;
-        Ok(RequestContent::FormData(connector_req))
+        .change_context(errors::ConnectorError::ParsingFailed)
     }
 
     fn build_request(
@@ -597,7 +602,7 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for Fi
         connectors: &Connectors,
     ) -> CustomResult<String, errors::ConnectorError> {
         let base_url = connectors.fiuu.secondary_base_url.clone();
-        Ok(format!("{}RMS/API/refundAPI/refund.php", base_url))
+        Ok(format!("{base_url}RMS/API/refundAPI/refund.php"))
     }
 
     fn get_request_body(
@@ -605,9 +610,8 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for Fi
         req: &PaymentsCancelRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let connector_req = build_form_from_struct(fiuu::FiuuPaymentCancelRequest::try_from(req)?)
-            .change_context(errors::ConnectorError::ParsingFailed)?;
-        Ok(RequestContent::FormData(connector_req))
+        build_form_from_struct(fiuu::FiuuPaymentCancelRequest::try_from(req)?)
+            .change_context(errors::ConnectorError::ParsingFailed)
     }
 
     fn build_request(
@@ -662,7 +666,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Fiuu {
         connectors: &Connectors,
     ) -> CustomResult<String, errors::ConnectorError> {
         let base_url = connectors.fiuu.secondary_base_url.clone();
-        Ok(format!("{}RMS/API/refundAPI/index.php", base_url))
+        Ok(format!("{base_url}RMS/API/refundAPI/index.php"))
     }
 
     fn get_request_body(
@@ -677,10 +681,8 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Fiuu {
         )?;
 
         let connector_router_data = fiuu::FiuuRouterData::from((refund_amount, req));
-        let connector_req =
-            build_form_from_struct(fiuu::FiuuRefundRequest::try_from(&connector_router_data)?)
-                .change_context(errors::ConnectorError::ParsingFailed)?;
-        Ok(RequestContent::FormData(connector_req))
+        build_form_from_struct(fiuu::FiuuRefundRequest::try_from(&connector_router_data)?)
+            .change_context(errors::ConnectorError::ParsingFailed)
     }
 
     fn build_request(
@@ -734,7 +736,7 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Fiuu {
         connectors: &Connectors,
     ) -> CustomResult<String, errors::ConnectorError> {
         let base_url = connectors.fiuu.secondary_base_url.clone();
-        Ok(format!("{}RMS/API/refundAPI/q_by_txn.php", base_url))
+        Ok(format!("{base_url}RMS/API/refundAPI/q_by_txn.php"))
     }
 
     fn get_request_body(
@@ -742,9 +744,8 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Fiuu {
         req: &RefundSyncRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let connector_req = build_form_from_struct(fiuu::FiuuRefundSyncRequest::try_from(req)?)
-            .change_context(errors::ConnectorError::ParsingFailed)?;
-        Ok(RequestContent::FormData(connector_req))
+        build_form_from_struct(fiuu::FiuuRefundSyncRequest::try_from(req)?)
+            .change_context(errors::ConnectorError::ParsingFailed)
     }
 
     fn build_request(
@@ -929,17 +930,21 @@ impl webhooks::IncomingWebhook for Fiuu {
     fn get_webhook_event_type(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
+        if request.body.is_empty() {
+            return Ok(api_models::webhooks::IncomingWebhookEvent::EndpointVerification);
+        }
         let header = utils::get_header_key_value("content-type", request.headers)?;
         let resource: FiuuWebhooksResponse = if header == "application/x-www-form-urlencoded" {
             parse_and_log_keys_in_url_encoded_response::<FiuuWebhooksResponse>(request.body);
             serde_urlencoded::from_bytes::<FiuuWebhooksResponse>(request.body)
-                .change_context(errors::ConnectorError::WebhookEventTypeNotFound)?
+                .change_context(errors::ConnectorError::WebhookResponseEncodingFailed)?
         } else {
             request
                 .body
                 .parse_struct("fiuu::FiuuWebhooksResponse")
-                .change_context(errors::ConnectorError::WebhookEventTypeNotFound)?
+                .change_context(errors::ConnectorError::WebhookResponseEncodingFailed)?
         };
 
         match resource {
@@ -955,7 +960,8 @@ impl webhooks::IncomingWebhook for Fiuu {
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let header = utils::get_header_key_value("content-type", request.headers)?;
         let payload: FiuuWebhooksResponse = if header == "application/x-www-form-urlencoded" {
             parse_and_log_keys_in_url_encoded_response::<FiuuWebhooksResponse>(request.body);
@@ -1018,4 +1024,132 @@ impl webhooks::IncomingWebhook for Fiuu {
     }
 }
 
-impl ConnectorSpecifications for Fiuu {}
+static FIUU_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> = LazyLock::new(|| {
+    let supported_capture_methods = vec![
+        CaptureMethod::Automatic,
+        CaptureMethod::Manual,
+        CaptureMethod::SequentialAutomatic,
+    ];
+
+    let supported_card_network = vec![
+        common_enums::CardNetwork::Visa,
+        common_enums::CardNetwork::JCB,
+        common_enums::CardNetwork::DinersClub,
+        common_enums::CardNetwork::UnionPay,
+        common_enums::CardNetwork::Mastercard,
+        common_enums::CardNetwork::Discover,
+    ];
+
+    let mut fiuu_supported_payment_methods = SupportedPaymentMethods::new();
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::RealTimePayment,
+        PaymentMethodType::DuitNow,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::NotSupported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: None,
+        },
+    );
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingFpx,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::NotSupported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: None,
+        },
+    );
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::Wallet,
+        PaymentMethodType::GooglePay,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::NotSupported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: None,
+        },
+    );
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::Wallet,
+        PaymentMethodType::ApplePay,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::NotSupported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: None,
+        },
+    );
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::Card,
+        PaymentMethodType::Credit,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::Supported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::Supported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
+
+    fiuu_supported_payment_methods.add(
+        PaymentMethod::Card,
+        PaymentMethodType::Debit,
+        PaymentMethodDetails {
+            mandates: common_enums::FeatureStatus::Supported,
+            refunds: common_enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::Supported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
+
+    fiuu_supported_payment_methods
+});
+
+static FIUU_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+    display_name: "Fiuu",
+    description:
+        "Fiuu, formerly known as Razer Merchant Services, is a leading online payment gateway in Southeast Asia, offering secure and seamless payment solutions for businesses of all sizes, including credit and debit cards, e-wallets, and bank transfers.",
+    connector_type: common_enums::HyperswitchConnectorCategory::PaymentGateway,
+    integration_status: common_enums::ConnectorIntegrationStatus::Live,
+};
+
+static FIUU_SUPPORTED_WEBHOOK_FLOWS: [common_enums::EventClass; 2] = [
+    common_enums::EventClass::Payments,
+    common_enums::EventClass::Refunds,
+];
+
+impl ConnectorSpecifications for Fiuu {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&FIUU_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*FIUU_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [common_enums::EventClass]> {
+        Some(&FIUU_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

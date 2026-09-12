@@ -11,7 +11,11 @@ key1 = "MerchantId"
 api_secret = "Secondary key"
 
 [amazonpay]
-api_key="API Key"
+api_key="Private Key"
+key1="Public Key"
+
+[archipel]
+api_key="CA Certificate PEM"
 
 [authorizedotnet]
 api_key = "MyMerchantName"
@@ -47,6 +51,10 @@ key1 = "key1"
 api_key = "access_key"
 key1 = "secret_key"
 
+[facilitapay]
+api_key = "password"
+key1 = "username" # email id
+
 [fiserv]
 api_key = "MyApiKey"
 key1 = "MerchantID"
@@ -61,8 +69,8 @@ api_secret = "API Secret Key"
 api_key = "API Key"
 
 [dlocal]
-key1 = "key1"
-api_key = "api_key"
+key1 = "x trans key"
+api_key = "x login"
 api_secret = "secret"
 
 [bambora]
@@ -184,7 +192,10 @@ api_key="API Key"
 api_key="API Key"
 
 [volt]
-api_key="API Key"
+api_key = "Username"
+api_secret = "Password"
+key1 = "Client ID"
+key2 = "Client Secret"
 
 [prophetpay]
 api_key="API Key"
@@ -279,6 +290,11 @@ api_secret = "Consumer Secret"
 [taxjar]
 api_key = "API Key"
 
+[nordea]
+api_key = "Client Secret"
+key1 = "Client ID"
+api_secret = "eIDAS Private Key"
+
 [novalnet]
 api_key="API Key"
 
@@ -324,3 +340,68 @@ api_key = "API Key"
 
 [recurly]
 api_key= "API Key"
+
+[barclaycard]
+api_key = "MyApiKey"
+key1 = "Merchant id"
+api_secret = "Secret key"
+
+
+[authipay]
+api_key = "MyApiKey"
+key1 = "MySecretKey"
+
+[checkbook]
+api_key="Client ID"
+key1 ="Client Secret"
+
+
+[santander]
+api_key="Client ID"
+key1 ="Client Secret"
+
+[dwolla]
+api_key="Client ID"
+key1="Client Secret"
+
+[payload]
+api_key="API Key"
+
+[calida]
+api_key="EOrder Token"
+
+[peachpayments]
+api_key="API Key"
+key1="Tenant ID"
+
+[tesouro]
+api_key="Client ID"
+key1="Client Secret"
+
+[finix]
+api_key = "Username"
+key1 = "Merchant Id"
+key2 = "Merchant Identity Id"
+api_secret = "Password"
+
+[payjustnowinstore]
+api_key = "Merchant API Key"
+key1 = "Merchant Terminal Id"
+
+[truelayer]
+api_key = "Client ID"
+key1 = "Client Secret"
+
+[imerchantsolutions]
+api_key = "API Key"
+
+[absa_sanlam]
+api_key = "API Key"
+key1 = "Merchant Id"
+
+[payconex]
+api_key = "API Key"
+key1 = "Account Id"
+
+[givepayments]
+api_key = "API Key"

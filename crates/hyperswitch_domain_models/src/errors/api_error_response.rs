@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use api_models::errors::types::Extra;
 use common_utils::errors::ErrorSwitch;
 use http::StatusCode;
@@ -79,8 +81,10 @@ pub enum ApiErrorResponse {
     DuplicatePayment {
         payment_id: common_utils::id_type::PaymentId,
     },
-    #[error(error_type = ErrorType::DuplicateRequest, code = "HE_01", message = "The payout with the specified payout_id '{payout_id}' already exists in our records")]
-    DuplicatePayout { payout_id: String },
+    #[error(error_type = ErrorType::DuplicateRequest, code = "HE_01", message = "The payout with the specified payout_id '{payout_id:?}' already exists in our records")]
+    DuplicatePayout {
+        payout_id: common_utils::id_type::PayoutId,
+    },
     #[error(error_type = ErrorType::DuplicateRequest, code = "HE_01", message = "The config with the specified key already exists in our records")]
     DuplicateConfig,
     #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Refund does not exist in our records")]
@@ -101,6 +105,11 @@ pub enum ApiErrorResponse {
     MerchantConnectorAccountNotFound { id: String },
     #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Business profile with the given id  '{id}' does not exist in our records")]
     ProfileNotFound { id: String },
+    #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Profile acquirer with id '{profile_acquirer_id}' not found for profile '{profile_id}'.")]
+    ProfileAcquirerNotFound {
+        profile_acquirer_id: String,
+        profile_id: String,
+    },
     #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Poll with the given id  '{id}' does not exist in our records")]
     PollNotFound { id: String },
     #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Resource ID does not exist in our records")]
@@ -172,7 +181,7 @@ pub enum ApiErrorResponse {
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_03", message = "The HTTP method is not applicable for this API")]
     InvalidHttpMethod,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_04", message = "Missing required param: {field_name}")]
-    MissingRequiredField { field_name: &'static str },
+    MissingRequiredField { field_name: Cow<'static, str> },
     #[error(
         error_type = ErrorType::InvalidRequestError, code = "IR_05",
         message = "{field_name} contains invalid data. Expected format is {expected_format}"
@@ -185,7 +194,7 @@ pub enum ApiErrorResponse {
     InvalidRequestData { message: String },
     /// Typically used when a field has invalid value, or deserialization of the value contained in a field fails.
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_07", message = "Invalid value provided: {field_name}")]
-    InvalidDataValue { field_name: &'static str },
+    InvalidDataValue { field_name: Cow<'static, str> },
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_08", message = "Client secret was not provided")]
     ClientSecretNotGiven,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_08", message = "Client secret has expired")]
@@ -196,6 +205,8 @@ pub enum ApiErrorResponse {
     MandateActive,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_11", message = "Customer has already been redacted")]
     CustomerRedacted,
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_11", message = "Payment method has already been redacted")]
+    PaymentMethodRedacted,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_12", message = "Reached maximum refund attempts")]
     MaximumRefundCount,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_13", message = "The refund amount exceeds the amount captured")]
@@ -227,7 +238,7 @@ pub enum ApiErrorResponse {
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_20", message = "{flow} flow not supported by the {connector} connector")]
     FlowNotSupported { flow: String, connector: String },
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_21", message = "Missing required params")]
-    MissingRequiredFields { field_names: Vec<&'static str> },
+    MissingRequiredFields { field_names: Vec<Cow<'static, str>> },
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_22", message = "Access forbidden. Not authorized to access this resource {resource}")]
     AccessForbidden { resource: String },
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_23", message = "{message}")]
@@ -283,6 +294,30 @@ pub enum ApiErrorResponse {
     PlatformAccountAuthNotSupported,
     #[error(error_type = ErrorType::InvalidRequestError, code = "IR_44", message = "Invalid platform account operation")]
     InvalidPlatformOperation,
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_45", message = "External vault failed during processing with connector")]
+    ExternalVaultFailed,
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_46", message = "Field {fields} doesn't match with the ones used during mandate creation")]
+    MandatePaymentDataMismatch { fields: String },
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_47", message = "Connector '{connector}' rejected field '{field_name}': length {received_length} exceeds maximum of {max_length}")]
+    MaxFieldLengthViolated {
+        connector: String,
+        field_name: String,
+        max_length: usize,
+        received_length: usize,
+    },
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_48", message = "The Status token for connector costumer id {resource} is locked by different PaymentIntent ID")]
+    InvalidPaymentIdProvided { resource: String },
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_49", message = "API does not support connected account operation")]
+    ConnectedAccountAuthNotSupported,
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_50", message = "Invalid connected account operation")]
+    InvalidConnectedOperation,
+    #[error(
+        error_type = ErrorType::InvalidRequestError, code = "IR_51",
+        message = "Access forbidden, invalid Basic authentication credentials"
+    )]
+    InvalidBasicAuth,
+    #[error(error_type = ErrorType::InvalidRequestError, code = "IR_52", message = "Payment Session has expired")]
+    PaymentSessionExpired,
     #[error(error_type = ErrorType::InvalidRequestError, code = "WE_01", message = "Failed to authenticate the webhook")]
     WebhookAuthenticationFailed,
     #[error(error_type = ErrorType::InvalidRequestError, code = "WE_02", message = "Bad request received in webhook")]
@@ -301,6 +336,15 @@ pub enum ApiErrorResponse {
         field_names: String,
         connector_transaction_id: Option<String>,
     },
+    #[error(error_type = ErrorType::ObjectNotFound, code = "HE_02", message = "Tokenization record not found for the given token_id {id}")]
+    TokenizationRecordNotFound { id: String },
+    #[error(error_type = ErrorType::ConnectorError, code = "CE_00", message = "Subscription operation: {operation} failed with connector")]
+    SubscriptionError { operation: String },
+    #[error(
+        error_type = ErrorType::InvalidRequestError, code = "IR_48",
+        message = "Access forbidden, expired JWT token was used"
+    )]
+    ExpiredJwtToken,
 }
 
 #[derive(Clone)]
@@ -374,7 +418,7 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
                 AER::InternalServerError(ApiError::new("HE", 0, "Something went wrong", None))
             },
             Self::HealthCheckError { message,component } => {
-                AER::InternalServerError(ApiError::new("HE",0,format!("{} health check failed with error: {}",component,message),None))
+                AER::InternalServerError(ApiError::new("HE",0,format!("{component} health check failed with error: {message}"),None))
             },
             Self::DuplicateRefundRequest => AER::BadRequest(ApiError::new("HE", 1, "Duplicate refund request. Refund already attempted with the refund ID", None)),
             Self::DuplicateMandate => AER::BadRequest(ApiError::new("HE", 1, "Duplicate mandate request. Mandate already attempted with the Mandate ID", None)),
@@ -387,7 +431,7 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
                 AER::BadRequest(ApiError::new("HE", 1, "The payment with the specified payment_id already exists in our records", Some(Extra {reason: Some(format!("{payment_id:?} already exists")), ..Default::default()})))
             }
             Self::DuplicatePayout { payout_id } => {
-                AER::BadRequest(ApiError::new("HE", 1, format!("The payout with the specified payout_id '{payout_id}' already exists in our records"), None))
+                AER::BadRequest(ApiError::new("HE", 1, format!("The payout with the specified payout_id '{payout_id:?}' already exists in our records"), None))
             }
             Self::DuplicateConfig => {
                 AER::BadRequest(ApiError::new("HE", 1, "The config with the specified key already exists in our records", None))
@@ -418,6 +462,9 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
             }
             Self::ProfileNotFound { id } => {
                 AER::NotFound(ApiError::new("HE", 2, format!("Business profile with the given id {id} does not exist"), None))
+            }
+            Self::ProfileAcquirerNotFound { profile_acquirer_id, profile_id } => {
+                AER::NotFound(ApiError::new("HE", 2, format!("Profile acquirer with id '{profile_acquirer_id}' not found for profile '{profile_id}'."), None))
             }
             Self::PollNotFound { .. } => {
                 AER::NotFound(ApiError::new("HE", 2, "Poll does not exist in our records", None))
@@ -552,6 +599,9 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
             Self::CustomerRedacted => {
                 AER::BadRequest(ApiError::new("IR", 11, "Customer has already been redacted", None))
             }
+            Self::PaymentMethodRedacted => {
+                AER::BadRequest(ApiError::new("IR", 11, "Payment method has already been redacted", None))
+            }
             Self::MaximumRefundCount => AER::BadRequest(ApiError::new("IR", 12, "Reached maximum refund attempts", None)),
             Self::RefundAmountExceedsPaymentAmount => {
                 AER::BadRequest(ApiError::new("IR", 13, "The refund amount exceeds the amount captured", None))
@@ -567,6 +617,7 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
                 AER::BadRequest(ApiError::new("IR", 16, message.to_string(), None))
             }
             Self::InvalidJwtToken => AER::Unauthorized(ApiError::new("IR", 17, "Access forbidden, invalid JWT token was used", None)),
+            Self::InvalidBasicAuth => AER::Unauthorized(ApiError::new("IR", 51, "Access forbidden, invalid Basic authentication credentials", None)),
             Self::GenericUnauthorized { message } => {
                 AER::Unauthorized(ApiError::new("IR", 18, message.to_string(), None))
             },
@@ -638,7 +689,30 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
             Self::CookieNotFound => {
                 AER::Unauthorized(ApiError::new("IR", 42, "Cookies are not found in the request", None))
             },
-
+            Self::PlatformAccountAuthNotSupported => {
+                AER::BadRequest(ApiError::new("IR", 43, "API does not support platform account operation", None))
+            }
+            Self::InvalidPlatformOperation => {
+                AER::Unauthorized(ApiError::new("IR", 44, "Invalid platform account operation", None))
+            }
+            Self::ExternalVaultFailed => {
+                AER::BadRequest(ApiError::new("IR", 45, "External Vault failed while processing with connector.", None))
+            },
+            Self::MandatePaymentDataMismatch { fields} => {
+                AER::BadRequest(ApiError::new("IR", 46, format!("Field {fields} doesn't match with the ones used during mandate creation"), Some(Extra {fields: Some(fields.to_owned()), ..Default::default()}))) //FIXME: error message
+            }
+            Self::MaxFieldLengthViolated { connector, field_name,  max_length, received_length} => {
+                AER::BadRequest(ApiError::new("IR", 47, format!("Connector '{connector}' rejected field '{field_name}': length {received_length} exceeds maximum of {max_length}"), Some(Extra {connector: Some(connector.to_string()), ..Default::default()})))
+            }
+            Self::InvalidPaymentIdProvided {resource} => {
+                AER::NotFound(ApiError::new("IR", 48, format!("The Status token for connector costumer id {resource} is locked by different PaymentIntent ID"), None))
+            },
+            Self::ConnectedAccountAuthNotSupported => {
+                AER::BadRequest(ApiError::new("IR", 49, "API does not support connected account operation", None))
+            }
+            Self::InvalidConnectedOperation => {
+                AER::Unauthorized(ApiError::new("IR", 50, "Invalid connected account operation", None))
+            }
             Self::WebhookAuthenticationFailed => {
                 AER::Unauthorized(ApiError::new("WE", 1, "Webhook authentication failed", None))
             }
@@ -664,18 +738,24 @@ impl ErrorSwitch<api_models::errors::types::ApiErrorResponse> for ApiErrorRespon
             } => AER::InternalServerError(ApiError::new(
                 "IE",
                 0,
-                format!("{} as data mismatched for {}", reason, field_names),
+                format!("{reason} as data mismatched for {field_names}"),
                 Some(Extra {
                     connector_transaction_id: connector_transaction_id.to_owned(),
                     ..Default::default()
                 })
             )),
-            Self::PlatformAccountAuthNotSupported => {
-                AER::BadRequest(ApiError::new("IR", 43, "API does not support platform operation", None))
+            Self::TokenizationRecordNotFound{ id } => {
+                AER::NotFound(ApiError::new("HE", 2, format!("Tokenization record not found for the given token_id '{id}' "), None))
             }
-            Self::InvalidPlatformOperation => {
-                AER::Unauthorized(ApiError::new("IR", 44, "Invalid platform account operation", None))
+            Self::SubscriptionError { operation } => {
+                AER::BadRequest(ApiError::new("CE", 9, format!("Subscription operation: {operation} failed with connector"), None))
             }
+            Self::ExpiredJwtToken => AER::Unauthorized(ApiError::new("IR", 48, "Access forbidden, expired JWT token was used", None)),
+            Self::PaymentSessionExpired => AER::BadRequest(ApiError::new(
+                "IR",
+                52,
+                "The provided payment session has expired", None
+            )),
         }
     }
 }
@@ -702,8 +782,11 @@ impl From<ApiErrorResponse> for router_data::ErrorResponse {
             },
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         }
     }
 }

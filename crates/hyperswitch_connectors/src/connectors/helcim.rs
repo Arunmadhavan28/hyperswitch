@@ -1,4 +1,5 @@
 pub mod transformers;
+use std::sync::LazyLock;
 
 use api_models::webhooks::IncomingWebhookEvent;
 use common_enums::enums;
@@ -10,6 +11,8 @@ use common_utils::{
 };
 use error_stack::{report, ResultExt};
 use hyperswitch_domain_models::{
+    errors::api_error_response::ApiErrorResponse,
+    payments::payment_attempt::PaymentAttempt,
     router_data::{AccessToken, ConnectorAuthType, ErrorResponse, RouterData},
     router_flow_types::{
         access_token_auth::AccessTokenAuth,
@@ -33,17 +36,18 @@ use hyperswitch_domain_models::{
 use hyperswitch_interfaces::{
     api::{
         self, ConnectorCommon, ConnectorCommonExt, ConnectorIntegration, ConnectorSpecifications,
-        ConnectorValidation,
+        ConnectorTransactionId, ConnectorValidation,
     },
     configs::Connectors,
     consts::NO_ERROR_CODE,
     errors,
     events::connector_api_logs::ConnectorEvent,
     types::{self, Response},
-    webhooks::{IncomingWebhook, IncomingWebhookRequestDetails},
+    webhooks::{IncomingWebhook, IncomingWebhookRequestDetails, WebhookContext},
 };
-use lazy_static::lazy_static;
-use masking::{ExposeInterface, Mask};
+#[cfg(feature = "v2")]
+use hyperswitch_masking::PeekInterface;
+use hyperswitch_masking::{ExposeInterface, Mask};
 use transformers as helcim;
 
 use crate::{
@@ -102,7 +106,7 @@ where
         &self,
         req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
@@ -143,7 +147,7 @@ impl ConnectorCommon for Helcim {
     fn get_auth_header(
         &self,
         auth_type: &ConnectorAuthType,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         let auth = helcim::HelcimAuthType::try_from(auth_type)
             .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
@@ -181,8 +185,11 @@ impl ConnectorCommon for Helcim {
             reason: Some(error_string),
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -217,7 +224,7 @@ impl ConnectorIntegration<SetupMandate, SetupMandateRequestData, PaymentsRespons
         &self,
         req: &SetupMandateRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         self.build_headers(req, connectors)
     }
@@ -292,7 +299,7 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         self.build_headers(req, connectors)
     }
@@ -384,7 +391,7 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Hel
         &self,
         req: &PaymentsSyncRouterData,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
@@ -474,7 +481,7 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         &self,
         req: &PaymentsCaptureRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         self.build_headers(req, connectors)
     }
@@ -561,7 +568,7 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for He
         &self,
         req: &PaymentsCancelRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         self.build_headers(req, connectors)
     }
@@ -641,7 +648,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Helcim 
         &self,
         req: &RefundsRouterData<Execute>,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         self.build_headers(req, connectors)
     }
@@ -727,7 +734,7 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Helcim {
         &self,
         req: &RefundSyncRouterData,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::maskable::Maskable<String>)>, errors::ConnectorError>
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
     {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
@@ -818,6 +825,7 @@ impl IncomingWebhook for Helcim {
     fn get_webhook_event_type(
         &self,
         _request: &IncomingWebhookRequestDetails<'_>,
+        _context: Option<&WebhookContext>,
     ) -> CustomResult<IncomingWebhookEvent, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
@@ -825,88 +833,87 @@ impl IncomingWebhook for Helcim {
     fn get_webhook_resource_object(
         &self,
         _request: &IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
 }
 
-lazy_static! {
-    static ref HELCIM_SUPPORTED_PAYMENT_METHODS: SupportedPaymentMethods = {
-        let supported_capture_methods = vec![
-            enums::CaptureMethod::Automatic,
-            enums::CaptureMethod::Manual,
-            enums::CaptureMethod::SequentialAutomatic,
-        ];
+static HELCIM_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> = LazyLock::new(|| {
+    let supported_capture_methods = vec![
+        enums::CaptureMethod::Automatic,
+        enums::CaptureMethod::Manual,
+        enums::CaptureMethod::SequentialAutomatic,
+    ];
 
-        let supported_card_network = vec![
-            common_enums::CardNetwork::Visa,
-            common_enums::CardNetwork::Mastercard,
-            common_enums::CardNetwork::Interac,
-            common_enums::CardNetwork::AmericanExpress,
-            common_enums::CardNetwork::JCB,
-            common_enums::CardNetwork::DinersClub,
-            common_enums::CardNetwork::Discover,
-            common_enums::CardNetwork::CartesBancaires,
-            common_enums::CardNetwork::UnionPay,
-        ];
+    let supported_card_network = vec![
+        common_enums::CardNetwork::Visa,
+        common_enums::CardNetwork::Mastercard,
+        common_enums::CardNetwork::Interac,
+        common_enums::CardNetwork::AmericanExpress,
+        common_enums::CardNetwork::JCB,
+        common_enums::CardNetwork::DinersClub,
+        common_enums::CardNetwork::Discover,
+        common_enums::CardNetwork::CartesBancaires,
+        common_enums::CardNetwork::UnionPay,
+    ];
 
-        let mut helcim_supported_payment_methods = SupportedPaymentMethods::new();
+    let mut helcim_supported_payment_methods = SupportedPaymentMethods::new();
 
-        helcim_supported_payment_methods.add(
-            enums::PaymentMethod::Card,
-            enums::PaymentMethodType::Credit,
-            PaymentMethodDetails{
-                mandates: enums::FeatureStatus::Supported,
-                refunds: enums::FeatureStatus::Supported,
-                supported_capture_methods: supported_capture_methods.clone(),
-                specific_features: Some(
-                    api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
-                        api_models::feature_matrix::CardSpecificFeatures {
-                            three_ds: common_enums::FeatureStatus::NotSupported,
-                            no_three_ds: common_enums::FeatureStatus::Supported,
-                            supported_card_networks: supported_card_network.clone(),
-                        }
-                    }),
-                ),
-            }
-        );
+    helcim_supported_payment_methods.add(
+        enums::PaymentMethod::Card,
+        enums::PaymentMethodType::Credit,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::NotSupported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
 
-        helcim_supported_payment_methods.add(
-            enums::PaymentMethod::Card,
-            enums::PaymentMethodType::Debit,
-            PaymentMethodDetails{
-                mandates: enums::FeatureStatus::Supported,
-                refunds: enums::FeatureStatus::Supported,
-                supported_capture_methods: supported_capture_methods.clone(),
-                specific_features: Some(
-                    api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
-                        api_models::feature_matrix::CardSpecificFeatures {
-                            three_ds: common_enums::FeatureStatus::NotSupported,
-                            no_three_ds: common_enums::FeatureStatus::Supported,
-                            supported_card_networks: supported_card_network.clone(),
-                        }
-                    }),
-                ),
-            }
-        );
+    helcim_supported_payment_methods.add(
+        enums::PaymentMethod::Card,
+        enums::PaymentMethodType::Debit,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::NotSupported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
 
-        helcim_supported_payment_methods
-    };
+    helcim_supported_payment_methods
+});
 
-    static ref HELCIM_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+static HELCIM_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
         display_name: "Helcim",
         description:
             "Helcim is a payment processing company that offers transparent, affordable merchant services for businesses of all sizes",
-        connector_type: enums::PaymentConnectorCategory::PaymentGateway,
+        connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+        integration_status: enums::ConnectorIntegrationStatus::Sandbox,
     };
 
-    static ref HELCIM_SUPPORTED_WEBHOOK_FLOWS: Vec<enums::EventClass> = Vec::new();
-
-}
+static HELCIM_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 0] = [];
 
 impl ConnectorSpecifications for Helcim {
     fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
-        Some(&*HELCIM_CONNECTOR_INFO)
+        Some(&HELCIM_CONNECTOR_INFO)
     }
 
     fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
@@ -914,6 +921,47 @@ impl ConnectorSpecifications for Helcim {
     }
 
     fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
-        Some(&*HELCIM_SUPPORTED_WEBHOOK_FLOWS)
+        Some(&HELCIM_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}
+
+impl ConnectorTransactionId for Helcim {
+    #[cfg(feature = "v1")]
+    fn connector_transaction_id(
+        &self,
+        payment_attempt: &PaymentAttempt,
+    ) -> Result<Option<String>, ApiErrorResponse> {
+        if payment_attempt.get_connector_payment_id().is_none() {
+            let metadata =
+                Self::connector_transaction_id(self, payment_attempt.connector_metadata.as_ref());
+            metadata.map_err(|_| ApiErrorResponse::ResourceIdNotFound)
+        } else {
+            Ok(payment_attempt
+                .get_connector_payment_id()
+                .map(ToString::to_string))
+        }
+    }
+
+    #[cfg(feature = "v2")]
+    fn connector_transaction_id(
+        &self,
+        payment_attempt: &PaymentAttempt,
+    ) -> Result<Option<String>, ApiErrorResponse> {
+        use hyperswitch_domain_models::errors::api_error_response::ApiErrorResponse;
+
+        if payment_attempt.get_connector_payment_id().is_none() {
+            let metadata = Self::connector_transaction_id(
+                self,
+                payment_attempt
+                    .connector_metadata
+                    .as_ref()
+                    .map(|connector_metadata| connector_metadata.peek()),
+            );
+            metadata.map_err(|_| ApiErrorResponse::ResourceIdNotFound)
+        } else {
+            Ok(payment_attempt
+                .get_connector_payment_id()
+                .map(ToString::to_string))
+        }
     }
 }

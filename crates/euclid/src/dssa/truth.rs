@@ -1,10 +1,13 @@
+use std::sync::LazyLock;
+
 use euclid_macros::knowledge;
-use once_cell::sync::Lazy;
 
-use crate::{dssa::graph::euclid_graph_prelude, frontend::dir};
+#[allow(unused_imports)] // Required by the `knowledge!` macro expansion
+use crate::dssa::graph::euclid_graph_prelude;
+use crate::frontend::dir;
 
-pub static ANALYSIS_GRAPH: Lazy<hyperswitch_constraint_graph::ConstraintGraph<dir::DirValue>> =
-    Lazy::new(|| {
+pub static ANALYSIS_GRAPH: LazyLock<hyperswitch_constraint_graph::ConstraintGraph<dir::DirValue>> =
+    LazyLock::new(|| {
         knowledge! {
             // Payment Method should be `Card` for a CardType to be present
             PaymentMethod(Card) ->> CardType(any);

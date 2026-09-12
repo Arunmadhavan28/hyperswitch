@@ -1,5 +1,8 @@
 //! Errors interface
 
+use std::borrow::Cow;
+
+use common_enums::ApiClientError;
 use common_utils::errors::ErrorSwitch;
 use hyperswitch_domain_models::errors::api_error_response::ApiErrorResponse;
 
@@ -32,9 +35,9 @@ pub enum ConnectorError {
     #[error("Failed to handle connector response")]
     ResponseHandlingFailed,
     #[error("Missing required field: {field_name}")]
-    MissingRequiredField { field_name: &'static str },
+    MissingRequiredField { field_name: Cow<'static, str> },
     #[error("Missing required fields: {field_names:?}")]
-    MissingRequiredFields { field_names: Vec<&'static str> },
+    MissingRequiredFields { field_names: Vec<Cow<'static, str>> },
     #[error("Failed to obtain authentication type")]
     FailedToObtainAuthType,
     #[error("Failed to obtain certificate")]
@@ -91,7 +94,7 @@ pub enum ConnectorError {
     #[error("Date Formatting Failed")]
     DateFormattingFailed,
     #[error("Invalid Data format")]
-    InvalidDataFormat { field_name: &'static str },
+    InvalidDataFormat { field_name: Cow<'static, str> },
     #[error("Payment Method data / Payment Method Type / Payment Experience Mismatch ")]
     MismatchedPaymentData,
     #[error("Failed to parse {wallet_name} wallet token")]
@@ -101,7 +104,7 @@ pub enum ConnectorError {
     #[error("File Validation failed")]
     FileValidationFailed { reason: String },
     #[error("Missing 3DS redirection payload: {field_name}")]
-    MissingConnectorRedirectionPayload { field_name: &'static str },
+    MissingConnectorRedirectionPayload { field_name: Cow<'static, str> },
     #[error("Failed at connector's end with code '{code}'")]
     FailedAtConnector { message: String, code: String },
     #[error("Payment Method Type not found")]
@@ -123,6 +126,15 @@ pub enum ConnectorError {
     GenericError {
         error_message: String,
         error_object: serde_json::Value,
+    },
+    #[error("Field {fields} doesn't match with the ones used during mandate creation")]
+    MandatePaymentDataMismatch { fields: String },
+    #[error("Field '{field_name}' is too long for connector '{connector}'")]
+    MaxFieldLengthViolated {
+        connector: String,
+        field_name: String,
+        max_length: usize,
+        received_length: usize,
     },
 }
 
@@ -153,6 +165,76 @@ impl ErrorSwitch<ApiErrorResponse> for ConnectorError {
                 ApiErrorResponse::WebhookInvalidMerchantSecret
             }
             _ => ApiErrorResponse::InternalServerError,
+        }
+    }
+}
+
+// http client errors
+#[allow(missing_docs, missing_debug_implementations)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum HttpClientError {
+    #[error("Header map construction failed")]
+    HeaderMapConstructionFailed,
+    #[error("Invalid proxy configuration")]
+    InvalidProxyConfiguration,
+    #[error("Client construction failed")]
+    ClientConstructionFailed,
+    #[error("Certificate decode failed")]
+    CertificateDecodeFailed,
+    #[error("Request body serialization failed")]
+    BodySerializationFailed,
+    #[error("Unexpected state reached/Invariants conflicted")]
+    UnexpectedState,
+
+    #[error("Failed to parse URL")]
+    UrlParsingFailed,
+    #[error("URL encoding of request payload failed")]
+    UrlEncodingFailed,
+    #[error("Failed to send request to connector {0}")]
+    RequestNotSent(String),
+    #[error("Failed to decode response")]
+    ResponseDecodingFailed,
+
+    #[error("Server responded with Request Timeout")]
+    RequestTimeoutReceived,
+
+    #[error("connection closed before a message could complete")]
+    ConnectionClosedIncompleteMessage,
+
+    #[error("Server responded with Internal Server Error")]
+    InternalServerErrorReceived,
+    #[error("Server responded with Bad Gateway")]
+    BadGatewayReceived,
+    #[error("Server responded with Service Unavailable")]
+    ServiceUnavailableReceived,
+    #[error("Server responded with Gateway Timeout")]
+    GatewayTimeoutReceived,
+    #[error("Server responded with unexpected response")]
+    UnexpectedServerResponse,
+}
+
+impl ErrorSwitch<ApiClientError> for HttpClientError {
+    fn switch(&self) -> ApiClientError {
+        match self {
+            Self::HeaderMapConstructionFailed => ApiClientError::HeaderMapConstructionFailed,
+            Self::InvalidProxyConfiguration => ApiClientError::InvalidProxyConfiguration,
+            Self::ClientConstructionFailed => ApiClientError::ClientConstructionFailed,
+            Self::CertificateDecodeFailed => ApiClientError::CertificateDecodeFailed,
+            Self::BodySerializationFailed => ApiClientError::BodySerializationFailed,
+            Self::UnexpectedState => ApiClientError::UnexpectedState,
+            Self::UrlParsingFailed => ApiClientError::UrlParsingFailed,
+            Self::UrlEncodingFailed => ApiClientError::UrlEncodingFailed,
+            Self::RequestNotSent(reason) => ApiClientError::RequestNotSent(reason.clone()),
+            Self::ResponseDecodingFailed => ApiClientError::ResponseDecodingFailed,
+            Self::RequestTimeoutReceived => ApiClientError::RequestTimeoutReceived,
+            Self::ConnectionClosedIncompleteMessage => {
+                ApiClientError::ConnectionClosedIncompleteMessage
+            }
+            Self::InternalServerErrorReceived => ApiClientError::InternalServerErrorReceived,
+            Self::BadGatewayReceived => ApiClientError::BadGatewayReceived,
+            Self::ServiceUnavailableReceived => ApiClientError::ServiceUnavailableReceived,
+            Self::GatewayTimeoutReceived => ApiClientError::GatewayTimeoutReceived,
+            Self::UnexpectedServerResponse => ApiClientError::UnexpectedServerResponse,
         }
     }
 }

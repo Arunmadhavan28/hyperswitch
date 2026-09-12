@@ -1,12 +1,14 @@
 pub mod transformers;
 
-use std::fmt::Debug;
+use std::sync::LazyLock;
 
+use common_enums::enums;
 use common_utils::{
     crypto,
     errors::CustomResult,
     ext_traits::BytesExt,
     request::{Method, Request, RequestBuilder, RequestContent},
+    types::{AmountConvertor, MinorUnit, MinorUnitForConnector},
 };
 use error_stack::ResultExt;
 use hyperswitch_domain_models::{
@@ -21,7 +23,10 @@ use hyperswitch_domain_models::{
         PaymentsCancelData, PaymentsCaptureData, PaymentsSessionData, PaymentsSyncData,
         RefundsData, SetupMandateRequestData,
     },
-    router_response_types::{PaymentsResponseData, RefundsResponseData},
+    router_response_types::{
+        ConnectorInfo, PaymentMethodDetails, PaymentsResponseData, RefundsResponseData,
+        SupportedPaymentMethods, SupportedPaymentMethodsExt,
+    },
     types::{
         PaymentsAuthorizeRouterData, PaymentsCaptureRouterData, PaymentsSyncRouterData,
         RefundsRouterData,
@@ -38,14 +43,27 @@ use hyperswitch_interfaces::{
     types::{PaymentsAuthorizeType, PaymentsSyncType, Response},
     webhooks::{self, IncomingWebhook},
 };
-use masking::{Mask, Maskable};
+use hyperswitch_masking::{Mask, Maskable};
 use transformers as opennode;
 
 use self::opennode::OpennodeWebhookDetails;
-use crate::{constants::headers, types::ResponseRouterData};
+use crate::{
+    connectors::opennode::transformers::OpennodeRouterData, constants::headers,
+    types::ResponseRouterData, utils::convert_amount,
+};
 
-#[derive(Debug, Clone)]
-pub struct Opennode;
+#[derive(Clone)]
+pub struct Opennode {
+    amount_convertor: &'static (dyn AmountConvertor<Output = MinorUnit> + Sync),
+}
+
+impl Opennode {
+    pub fn new() -> &'static Self {
+        &Self {
+            amount_convertor: &MinorUnitForConnector,
+        }
+    }
+}
 
 impl api::Payment for Opennode {}
 impl api::PaymentSession for Opennode {}
@@ -135,8 +153,11 @@ impl ConnectorCommon for Opennode {
             reason: None,
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -196,12 +217,13 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         req: &PaymentsAuthorizeRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let connector_router_data = opennode::OpennodeRouterData::try_from((
-            &self.get_currency_unit(),
+        let amount = convert_amount(
+            self.amount_convertor,
+            req.request.minor_amount,
             req.request.currency,
-            req.request.amount,
-            req,
-        ))?;
+        )?;
+
+        let connector_router_data = OpennodeRouterData::try_from((amount, req))?;
         let connector_req = opennode::OpennodePaymentsRequest::try_from(&connector_router_data)?;
         Ok(RequestContent::Json(Box::new(connector_req)))
     }
@@ -408,6 +430,7 @@ impl IncomingWebhook for Opennode {
     fn get_webhook_event_type(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
         let notif = serde_urlencoded::from_bytes::<OpennodeWebhookDetails>(request.body)
             .change_context(errors::ConnectorError::WebhookBodyDecodingFailed)?;
@@ -430,7 +453,8 @@ impl IncomingWebhook for Opennode {
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let notif = serde_urlencoded::from_bytes::<OpennodeWebhookDetails>(request.body)
             .change_context(errors::ConnectorError::WebhookBodyDecodingFailed)?;
 
@@ -438,4 +462,46 @@ impl IncomingWebhook for Opennode {
     }
 }
 
-impl ConnectorSpecifications for Opennode {}
+static OPENNODE_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(|| {
+        let supported_capture_methods = vec![enums::CaptureMethod::Automatic];
+
+        let mut opennode_supported_payment_methods = SupportedPaymentMethods::new();
+
+        opennode_supported_payment_methods.add(
+            enums::PaymentMethod::Crypto,
+            enums::PaymentMethodType::CryptoCurrency,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::NotSupported,
+                supported_capture_methods,
+                specific_features: None,
+            },
+        );
+
+        opennode_supported_payment_methods
+    });
+
+static OPENNODE_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+    display_name: "Opennode",
+    description:
+        "OpenNode offers accessible way for e-commerce businesses to process bitcoin payments.",
+    connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+    integration_status: enums::ConnectorIntegrationStatus::Beta,
+};
+
+static OPENNODE_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 1] = [enums::EventClass::Payments];
+
+impl ConnectorSpecifications for Opennode {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&OPENNODE_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*OPENNODE_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&OPENNODE_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

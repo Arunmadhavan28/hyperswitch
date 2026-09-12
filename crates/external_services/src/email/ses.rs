@@ -11,7 +11,7 @@ use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use common_utils::{errors::CustomResult, pii};
 use error_stack::{report, ResultExt};
 use hyper::Uri;
-use masking::PeekInterface;
+use hyperswitch_masking::PeekInterface;
 use router_env::logger;
 
 use crate::email::{EmailClient, EmailError, EmailResult, EmailSettings, IntermediateString};
@@ -19,7 +19,7 @@ use crate::email::{EmailClient, EmailError, EmailResult, EmailSettings, Intermed
 /// Client for AWS SES operation
 #[derive(Debug, Clone)]
 pub struct AwsSes {
-    sender: String,
+    sender: pii::Email,
     ses_config: SESConfig,
     settings: EmailSettings,
 }
@@ -54,7 +54,7 @@ impl SESConfig {
 pub enum AwsSesError {
     /// An error occurred in the SDK while sending email.
     #[error("Failed to Send Email {0:?}")]
-    SendingFailure(aws_sdk_sesv2::error::SdkError<SendEmailError>),
+    SendingFailure(Box<aws_sdk_sesv2::error::SdkError<SendEmailError>>),
 
     /// Configuration variable is missing to construct the email client
     #[error("Missing configuration variable {0}")]
@@ -222,7 +222,7 @@ impl EmailClient for AwsSes {
 
         email_client
             .send_email()
-            .from_email_address(self.sender.to_owned())
+            .from_email_address(self.sender.peek())
             .destination(
                 Destination::builder()
                     .to_addresses(recipient.peek())
@@ -245,7 +245,7 @@ impl EmailClient for AwsSes {
             )
             .send()
             .await
-            .map_err(AwsSesError::SendingFailure)
+            .map_err(|e| AwsSesError::SendingFailure(Box::new(e)))
             .change_context(EmailError::EmailSendingFailure)?;
 
         Ok(())

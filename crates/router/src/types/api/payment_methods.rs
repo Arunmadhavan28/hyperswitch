@@ -1,30 +1,29 @@
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 pub use api_models::payment_methods::{
-    CardDetail, CardDetailFromLocker, CardDetailsPaymentMethod, CardNetworkTokenizeRequest,
-    CardNetworkTokenizeResponse, CardType, CustomerPaymentMethod,
-    CustomerPaymentMethodsListResponse, DeleteTokenizeByTokenRequest, GetTokenizePayloadRequest,
-    GetTokenizePayloadResponse, ListCountriesCurrenciesRequest, MigrateCardDetail,
-    NetworkTokenDetailsPaymentMethod, NetworkTokenResponse, PaymentMethodCollectLinkRenderRequest,
-    PaymentMethodCollectLinkRequest, PaymentMethodCreate, PaymentMethodCreateData,
-    PaymentMethodDeleteResponse, PaymentMethodId, PaymentMethodIntentConfirm,
-    PaymentMethodIntentCreate, PaymentMethodListData, PaymentMethodListRequest,
-    PaymentMethodListResponse, PaymentMethodMigrate, PaymentMethodMigrateResponse,
-    PaymentMethodResponse, PaymentMethodResponseData, PaymentMethodUpdate, PaymentMethodUpdateData,
-    PaymentMethodsData, TokenizePayloadEncrypted, TokenizePayloadRequest, TokenizedCardValue1,
-    TokenizedCardValue2, TokenizedWalletValue1, TokenizedWalletValue2,
-    TotalPaymentMethodCountResponse,
-};
-#[cfg(all(
-    any(feature = "v2", feature = "v1"),
-    not(feature = "payment_methods_v2")
-))]
-pub use api_models::payment_methods::{
-    CardDetail, CardDetailFromLocker, CardDetailsPaymentMethod, CardNetworkTokenizeRequest,
-    CardNetworkTokenizeResponse, CustomerPaymentMethod, CustomerPaymentMethodsListResponse,
-    DefaultPaymentMethod, DeleteTokenizeByTokenRequest, GetTokenizePayloadRequest,
-    GetTokenizePayloadResponse, ListCountriesCurrenciesRequest, MigrateCardDetail,
+    BankDebitDetailUpdate, CardDetail, CardDetailFromLocker, CardDetailsPaymentMethod,
+    CardNetworkTokenizeRequest, CardNetworkTokenizeResponse, CardType,
+    CustomerPaymentMethodResponseItem, DefaultPaymentMethod, DeleteTokenizeByTokenRequest,
+    GetNetworkTokenEiligibilityResponse, GetTokenizePayloadRequest, GetTokenizePayloadResponse,
+    ListCountriesCurrenciesRequest, MigrateCardDetail, NetworkTokenDetailsPaymentMethod,
+    NetworkTokenDetailsResponse, NetworkTokenEligibilityRequest, NetworkTokenResponse,
     PaymentMethodCollectLinkRenderRequest, PaymentMethodCollectLinkRequest, PaymentMethodCreate,
-    PaymentMethodCreateData, PaymentMethodDeleteResponse, PaymentMethodId,
+    PaymentMethodCreateData, PaymentMethodDeleteResponse, PaymentMethodDetailsResponse,
+    PaymentMethodId, PaymentMethodIntentConfirm, PaymentMethodIntentCreate, PaymentMethodListData,
+    PaymentMethodListResponseForSession, PaymentMethodMigrate, PaymentMethodMigrateResponse,
+    PaymentMethodResponse, PaymentMethodResponseData, PaymentMethodUpdate, PaymentMethodUpdateData,
+    PaymentMethodsData, ProxyCardDetails, RequestPaymentMethodTypes, TokenDataResponse,
+    TokenDetailsResponse, TokenizePayloadEncrypted, TokenizePayloadRequest, TokenizedCardValue1,
+    TokenizedCardValue2, TokenizedWalletValue1, TokenizedWalletValue2,
+    TotalPaymentMethodCountResponse, WalletPaymentMethodData,
+};
+#[cfg(feature = "v1")]
+pub use api_models::payment_methods::{
+    CardDetail, CardDetailFromLocker, CardDetailsPaymentMethod, CardNetworkTokenizeRequest,
+    CardNetworkTokenizeResponse, CustomerPaymentMethod, CustomerPaymentMethodUpdateResponse,
+    CustomerPaymentMethodsListResponse, DefaultPaymentMethod, DeleteTokenizeByTokenRequest,
+    GetTokenizePayloadRequest, GetTokenizePayloadResponse, ListCountriesCurrenciesRequest,
+    MigrateCardDetail, PaymentMethodCollectLinkRenderRequest, PaymentMethodCollectLinkRequest,
+    PaymentMethodCreate, PaymentMethodCreateData, PaymentMethodDeleteResponse, PaymentMethodId,
     PaymentMethodListRequest, PaymentMethodListResponse, PaymentMethodMigrate,
     PaymentMethodMigrateResponse, PaymentMethodResponse, PaymentMethodUpdate, PaymentMethodsData,
     TokenizeCardRequest, TokenizeDataRequest, TokenizePayloadEncrypted, TokenizePayloadRequest,
@@ -37,7 +36,7 @@ use crate::core::{
     errors::{self, RouterResult},
     payments::helpers::validate_payment_method_type_against_payment_method,
 };
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 use crate::utils;
 
 pub(crate) trait PaymentMethodCreateExt {
@@ -45,10 +44,7 @@ pub(crate) trait PaymentMethodCreateExt {
 }
 
 // convert self.payment_method_type to payment_method and compare it against self.payment_method
-#[cfg(all(
-    any(feature = "v2", feature = "v1"),
-    not(feature = "payment_methods_v2")
-))]
+#[cfg(feature = "v1")]
 impl PaymentMethodCreateExt for PaymentMethodCreate {
     fn validate(&self) -> RouterResult<()> {
         if let Some(pm) = self.payment_method {
@@ -65,14 +61,27 @@ impl PaymentMethodCreateExt for PaymentMethodCreate {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl PaymentMethodCreateExt for PaymentMethodCreate {
     fn validate(&self) -> RouterResult<()> {
         utils::when(
-            !validate_payment_method_type_against_payment_method(
-                self.payment_method_type,
-                self.payment_method_subtype,
-            ),
+            self.payment_method_type != api_models::enums::PaymentMethod::Card
+                && self.payment_method_subtype.is_none(),
+            || {
+                Err(report!(errors::ApiErrorResponse::MissingRequiredField {
+                    field_name: "payment_method_subtype".into()
+                }))
+            },
+        )?;
+
+        utils::when(
+            self.payment_method_subtype
+                .is_some_and(|payment_method_subtype| {
+                    !validate_payment_method_type_against_payment_method(
+                        self.payment_method_type,
+                        payment_method_subtype,
+                    )
+                }),
             || {
                 Err(report!(errors::ApiErrorResponse::InvalidRequestData {
                     message: "Invalid 'payment_method_type' provided".to_string()
@@ -97,7 +106,7 @@ impl PaymentMethodCreateExt for PaymentMethodCreate {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl PaymentMethodCreateExt for PaymentMethodIntentConfirm {
     fn validate(&self) -> RouterResult<()> {
         utils::when(
@@ -125,6 +134,34 @@ impl PaymentMethodCreateExt for PaymentMethodIntentConfirm {
                 .attach_printable("Invalid payment method data"))
             },
         )?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "v2")]
+pub(crate) trait PaymentMethodSessionExt {
+    fn validate(
+        &self,
+        payment_method_session: &hyperswitch_domain_models::payment_methods::PaymentMethodSession,
+    ) -> RouterResult<()>;
+}
+
+#[cfg(feature = "v2")]
+impl PaymentMethodSessionExt for api_models::payment_methods::PaymentMethodSessionConfirmRequest {
+    fn validate(
+        &self,
+        payment_method_session: &hyperswitch_domain_models::payment_methods::PaymentMethodSession,
+    ) -> RouterResult<()> {
+        utils::when(
+            self.payment_method_type != api_models::enums::PaymentMethod::Card
+                && self.payment_method_subtype.is_none(),
+            || {
+                Err(report!(errors::ApiErrorResponse::MissingRequiredField {
+                    field_name: "payment_method_subtype".into()
+                }))
+            },
+        )?;
+
         Ok(())
     }
 }

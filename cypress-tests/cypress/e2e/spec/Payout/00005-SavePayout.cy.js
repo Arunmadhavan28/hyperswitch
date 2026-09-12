@@ -8,15 +8,28 @@ let payoutBody;
 describe("[Payout] Saved Card", () => {
   let shouldContinue = true; // variable that will be used to skip tests if a previous test fails
 
-  before("seed global state", () => {
-    cy.task("getGlobalState").then((state) => {
-      globalState = new State(state);
+  before("seed global state", function () {
+    cy.task("getGlobalState")
+      .then((state) => {
+        globalState = new State(state);
 
-      // Check if the connector supports card payouts (based on the connector configuration in creds)
-      if (!globalState.get("payoutsExecution")) {
-        shouldContinue = false;
-      }
-    });
+        if (!globalState.get("payoutsExecution")) {
+          shouldContinue = false;
+        }
+
+        if (
+          !utils.CONNECTOR_LISTS.INCLUDE.SAVED_CARD.includes(
+            globalState.get("connectorId")
+          )
+        ) {
+          shouldContinue = false;
+        }
+      })
+      .then(() => {
+        if (!shouldContinue) {
+          this.skip();
+        }
+      });
   });
 
   after("flush global state", () => {
@@ -131,15 +144,28 @@ describe("[Payout] Saved Card", () => {
 describe("[Payout] Saved Bank transfer", () => {
   let shouldContinue = true; // variable that will be used to skip tests if a previous test fails
 
-  before("seed global state", () => {
-    cy.task("getGlobalState").then((state) => {
-      globalState = new State(state);
+  before("seed global state", function () {
+    cy.task("getGlobalState")
+      .then((state) => {
+        globalState = new State(state);
 
-      // Check if the connector supports card payouts (based on the connector configuration in creds)
-      if (!globalState.get("payoutsExecution")) {
-        shouldContinue = false;
-      }
-    });
+        if (!globalState.get("payoutsExecution")) {
+          shouldContinue = false;
+        }
+
+        if (
+          !utils.CONNECTOR_LISTS.INCLUDE.SAVED_BANK_TRANSFER_SEPA.includes(
+            globalState.get("connectorId")
+          )
+        ) {
+          shouldContinue = false;
+        }
+      })
+      .then(() => {
+        if (!shouldContinue) {
+          this.skip();
+        }
+      });
   });
 
   after("flush global state", () => {
@@ -167,7 +193,7 @@ describe("[Payout] Saved Bank transfer", () => {
       it("create payment method", () => {
         const data = utils.getConnectorDetails(globalState.get("connectorId"))[
           "bank_transfer_pm"
-        ]["sepa"]["SavePayoutMethod"];
+        ]["sepa_bank_transfer"]["SavePayoutMethod"];
 
         cy.createPaymentMethodTest(globalState, data);
       });
@@ -176,10 +202,10 @@ describe("[Payout] Saved Bank transfer", () => {
         cy.listCustomerPMCallTest(globalState);
       });
 
-      it("[Payout] [Bank transfer] [SEPA] Fulfill using Token", () => {
+      it("[Payout] [Bank transfer] [SEPA_BANK_TRANSFER] Fulfill using Token", () => {
         const data = utils.getConnectorDetails(globalState.get("connectorId"))[
           "bank_transfer_pm"
-        ]["sepa"]["Token"];
+        ]["sepa_bank_transfer"]["Token"];
 
         cy.createConfirmWithTokenPayoutTest(
           payoutBody,
@@ -217,7 +243,7 @@ describe("[Payout] Saved Bank transfer", () => {
       it("confirm-payout-call-with-auto-fulfill-test", () => {
         const data = utils.getConnectorDetails(globalState.get("connectorId"))[
           "bank_transfer_pm"
-        ]["sepa"]["Fulfill"];
+        ]["sepa_bank_transfer"]["Fulfill"];
 
         cy.createConfirmPayoutTest(payoutBody, data, true, true, globalState);
 
@@ -229,10 +255,10 @@ describe("[Payout] Saved Bank transfer", () => {
         cy.listCustomerPMCallTest(globalState);
       });
 
-      it("[Payout] [Bank transfer] [SEPA] Fulfill using Token", () => {
+      it("[Payout] [Bank transfer] [SEPA_BANK_TRANSFER] Fulfill using Token", () => {
         const data = utils.getConnectorDetails(globalState.get("connectorId"))[
           "bank_transfer_pm"
-        ]["sepa"]["Token"];
+        ]["sepa_bank_transfer"]["Token"];
 
         cy.createConfirmWithTokenPayoutTest(
           payoutBody,

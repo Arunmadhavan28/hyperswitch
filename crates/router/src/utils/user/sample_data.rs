@@ -4,19 +4,19 @@ use api_models::{
 };
 use common_utils::{
     id_type,
-    types::{ConnectorTransactionId, MinorUnit},
+    types::{AmountConvertor, ConnectorTransactionId, MinorUnit, StringMinorUnitForConnector},
 };
 #[cfg(feature = "v1")]
 use diesel_models::user::sample_data::PaymentAttemptBatchNew;
 use diesel_models::{enums as storage_enums, DisputeNew, RefundNew};
 use error_stack::ResultExt;
 use hyperswitch_domain_models::payments::PaymentIntent;
-use rand::{prelude::SliceRandom, thread_rng, Rng};
 use time::OffsetDateTime;
 
 use crate::{
     consts,
     core::errors::sample_data::{SampleDataError, SampleDataResult},
+    types::domain,
     SessionState,
 };
 
@@ -36,7 +36,6 @@ pub async fn generate_sample_data(
     )>,
 > {
     let sample_data_size: usize = req.record.unwrap_or(100);
-    let key_manager_state = &state.into();
     if !(10..=100).contains(&sample_data_size) {
         return Err(SampleDataError::InvalidRange.into());
     }
@@ -44,7 +43,6 @@ pub async fn generate_sample_data(
     let key_store = state
         .store
         .get_merchant_key_store_by_merchant_id(
-            key_manager_state,
             merchant_id,
             &state.store.get_master_key().to_vec().into(),
         )
@@ -53,10 +51,17 @@ pub async fn generate_sample_data(
 
     let merchant_from_db = state
         .store
-        .find_merchant_account_by_merchant_id(key_manager_state, merchant_id, &key_store)
+        .find_merchant_account_by_merchant_id(merchant_id, &key_store)
         .await
         .change_context::<SampleDataError>(SampleDataError::DataDoesNotExist)?;
 
+    let platform = domain::Platform::new(
+        merchant_from_db.clone(),
+        key_store.clone(),
+        merchant_from_db.clone(),
+        key_store,
+        None,
+    );
     #[cfg(feature = "v1")]
     let (profile_id_result, business_country_default, business_label_default) = {
         let merchant_parsed_details: Vec<api_models::admin::PrimaryBusinessDetails> =
@@ -69,11 +74,9 @@ pub async fn generate_sample_data(
         let business_label_default = merchant_parsed_details.first().map(|x| x.business.clone());
 
         let profile_id = crate::core::utils::get_profile_id_from_business_details(
-            key_manager_state,
-            &key_store,
             business_country_default,
             business_label_default.as_ref(),
-            &merchant_from_db,
+            platform.get_processor(),
             req.profile_id.as_ref(),
             &*state.store,
             false,
@@ -87,7 +90,7 @@ pub async fn generate_sample_data(
         let profile_id = req
             .profile_id.clone()
             .ok_or(hyperswitch_domain_models::errors::api_error_response::ApiErrorResponse::MissingRequiredField {
-                field_name: "profile_id",
+                field_name: "profile_id".into(),
             });
 
         (profile_id, None, None)
@@ -102,7 +105,7 @@ pub async fn generate_sample_data(
 
             state
                 .store
-                .list_profile_by_merchant_id(key_manager_state, &key_store, merchant_id)
+                .list_profile_by_merchant_id(platform.get_processor().get_key_store(), merchant_id)
                 .await
                 .change_context(SampleDataError::InternalServerError)
                 .attach_printable("Failed to get business profile")?
@@ -132,11 +135,12 @@ pub async fn generate_sample_data(
 
     let mut disputes_count = 0;
 
-    let mut random_array: Vec<usize> = (1..=sample_data_size).collect();
-
-    // Shuffle the array
-    let mut rng = thread_rng();
-    random_array.shuffle(&mut rng);
+    // A shuffle of `1..=n` is a permutation of `0..n` with one added, so it goes
+    // through the permutation seam rather than shuffling in place.
+    let random_array: Vec<usize> = common_utils::generate_random_permutation(sample_data_size)
+        .into_iter()
+        .map(|index| index + 1)
+        .collect();
 
     let mut res: Vec<(
         PaymentIntent,
@@ -195,16 +199,16 @@ pub async fn generate_sample_data(
         let payment_id = id_type::PaymentId::generate_test_payment_id_for_sample_data();
         let attempt_id = payment_id.get_attempt_id(1);
         let client_secret = payment_id.generate_client_secret();
-        let amount = thread_rng().gen_range(min_amount..=max_amount);
+        let amount = common_utils::generate_random_number_in_range(min_amount, max_amount);
 
-        let created_at @ modified_at @ last_synced =
-            OffsetDateTime::from_unix_timestamp(thread_rng().gen_range(start_time..=end_time))
-                .map(common_utils::date_time::convert_to_pdt)
-                .unwrap_or(
-                    req.start_time.unwrap_or_else(|| {
-                        common_utils::date_time::now() - time::Duration::days(7)
-                    }),
-                );
+        let created_at @ modified_at @ last_synced = OffsetDateTime::from_unix_timestamp(
+            common_utils::generate_random_number_in_range(start_time, end_time),
+        )
+        .map(common_utils::date_time::convert_to_pdt)
+        .unwrap_or(
+            req.start_time
+                .unwrap_or_else(|| common_utils::date_time::now() - time::Duration::days(7)),
+        );
         let session_expiry =
             created_at.saturating_add(time::Duration::seconds(consts::DEFAULT_SESSION_EXPIRY));
 
@@ -276,7 +280,31 @@ pub async fn generate_sample_data(
             skip_external_tax_calculation: None,
             request_extended_authorization: None,
             psd2_sca_exemption_type: None,
-            platform_merchant_id: None,
+            processor_merchant_id: merchant_id.clone(),
+            created_by: None,
+            force_3ds_challenge: None,
+            force_3ds_challenge_trigger: None,
+            is_iframe_redirection_enabled: None,
+            is_payment_id_from_merchant: None,
+            payment_channel: None,
+            order_date: None,
+            discount_amount: None,
+            duty_amount: None,
+            tax_status: None,
+            shipping_amount_tax: None,
+            enable_partial_authorization: None,
+            enable_overcapture: None,
+            mit_category: None,
+            billing_descriptor: None,
+            is_account_funded_transaction: None,
+            recipient_details: None,
+            tokenization: None,
+            partner_merchant_identifier_details: None,
+            state_metadata: None,
+            installment_options: None,
+            profile_acquirer_id: None,
+            external_surcharge_strategy: None,
+            external_surcharge_applicable: None,
         };
         let (connector_transaction_id, processor_transaction_data) =
             ConnectorTransactionId::form_id_and_data(attempt_id.clone());
@@ -298,7 +326,9 @@ pub async fn generate_sample_data(
                 .to_string(),
             ),
             payment_method: Some(common_enums::PaymentMethod::Card),
-            payment_method_type: Some(get_payment_method_type(thread_rng().gen_range(1..=2))),
+            payment_method_type: Some(get_payment_method_type(
+                u8::try_from(common_utils::generate_random_number_in_range(1, 2)).unwrap_or(1),
+            )),
             authentication_type: Some(
                 *auth_type
                     .get((num - 1) % auth_type_len)
@@ -352,6 +382,7 @@ pub async fn generate_sample_data(
             mandate_data: None,
             payment_method_billing_address_id: None,
             fingerprint_id: None,
+            fingerprint_type: None,
             charge_id: None,
             client_source: None,
             client_version: None,
@@ -364,8 +395,22 @@ pub async fn generate_sample_data(
             connector_mandate_detail: None,
             request_extended_authorization: None,
             extended_authorization_applied: None,
+            extended_authorization_last_applied_at: None,
             capture_before: None,
             card_discovery: None,
+            processor_merchant_id: Some(merchant_id.clone()),
+            created_by: None,
+            setup_future_usage_applied: None,
+            routing_approach: None,
+            connector_request_reference_id: None,
+            network_transaction_id: None,
+            network_transaction_link_id: None,
+            network_details: None,
+            is_stored_credential: None,
+            authorized_amount: None,
+            tokenization: None,
+            encrypted_payment_method_data: None,
+            sender_payment_instrument_id: None,
         };
 
         let refund = if refunds_count < number_of_refunds && !is_failed_payment {
@@ -407,6 +452,8 @@ pub async fn generate_sample_data(
                 organization_id: org_id.clone(),
                 processor_refund_data: None,
                 processor_transaction_data,
+                processor_merchant_id: None,
+                created_by: None,
             })
         } else {
             None
@@ -415,13 +462,18 @@ pub async fn generate_sample_data(
         let dispute =
             if disputes_count < number_of_disputes && !is_failed_payment && refund.is_none() {
                 disputes_count += 1;
+                let currency = payment_intent
+                    .currency
+                    .unwrap_or(common_enums::Currency::USD);
                 Some(DisputeNew {
                     dispute_id: common_utils::generate_id_with_default_len("test"),
-                    amount: (amount * 100).to_string(),
-                    currency: payment_intent
-                        .currency
-                        .unwrap_or(common_enums::Currency::USD)
-                        .to_string(),
+                    amount: StringMinorUnitForConnector::convert(
+                        &StringMinorUnitForConnector,
+                        MinorUnit::new(amount * 100),
+                        currency,
+                    )
+                    .change_context(SampleDataError::InternalServerError)?,
+                    currency: currency.to_string(),
                     dispute_stage: storage_enums::DisputeStage::Dispute,
                     dispute_status: storage_enums::DisputeStatus::DisputeOpened,
                     payment_id: payment_id.clone(),
@@ -438,12 +490,16 @@ pub async fn generate_sample_data(
                         .connector
                         .clone()
                         .unwrap_or(DummyConnector4.to_string()),
-                    evidence: None,
+                    evidence: hyperswitch_masking::Secret::new(serde_json::json!({})),
                     profile_id: payment_intent.profile_id.clone(),
                     merchant_connector_id: payment_attempt.merchant_connector_id.clone(),
-                    dispute_amount: amount * 100,
+                    dispute_amount: MinorUnit::new(amount * 100),
                     organization_id: org_id.clone(),
                     dispute_currency: Some(payment_intent.currency.unwrap_or_default()),
+                    processor_merchant_id: None,
+                    created_by: None,
+                    created_at: common_utils::date_time::now(),
+                    modified_at: common_utils::date_time::now(),
                 })
             } else {
                 None

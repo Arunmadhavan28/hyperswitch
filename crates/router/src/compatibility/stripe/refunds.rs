@@ -50,9 +50,12 @@ pub async fn refund_create(
         &req,
         create_refund_req,
         |state, auth: auth::AuthenticationData, req, _| {
-            refunds::refund_create_core(state, auth.merchant_account, None, auth.key_store, req)
+            refunds::refund_create_core(state, auth.platform, None, req)
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: false,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await
@@ -96,14 +99,16 @@ pub async fn refund_retrieve_with_gateway_creds(
         |state, auth: auth::AuthenticationData, refund_request, _| {
             refunds::refund_response_wrapper(
                 state,
-                auth.merchant_account,
+                auth.platform,
                 None,
-                auth.key_store,
                 refund_request,
                 refunds::refund_retrieve_core_with_refund_id,
             )
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: false,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await
@@ -118,6 +123,7 @@ pub async fn refund_retrieve(
         refund_id: path.into_inner(),
         force_sync: Some(true),
         merchant_connector_details: None,
+        all_keys_required: None,
     };
 
     let flow = Flow::RefundsRetrieveForceSync;
@@ -139,14 +145,16 @@ pub async fn refund_retrieve(
         |state, auth: auth::AuthenticationData, refund_request, _| {
             refunds::refund_response_wrapper(
                 state,
-                auth.merchant_account,
+                auth.platform,
                 None,
-                auth.key_store,
                 refund_request,
                 refunds::refund_retrieve_core_with_refund_id,
             )
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: false,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await
@@ -178,9 +186,12 @@ pub async fn refund_update(
         &req,
         create_refund_update_req,
         |state, auth: auth::AuthenticationData, req, _| {
-            refunds::refund_update_core(state, auth.merchant_account, req)
+            refunds::refund_update_core(state, auth.platform, req)
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: false,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await

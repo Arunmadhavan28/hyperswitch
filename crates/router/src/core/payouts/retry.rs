@@ -1,7 +1,8 @@
-use std::{cmp::Ordering, str::FromStr, vec::IntoIter};
+use std::vec::IntoIter;
 
 use common_enums::PayoutRetryType;
-use error_stack::{report, ResultExt};
+use error_stack::ResultExt;
+use hyperswitch_domain_models::payments::HeaderPayload;
 use router_env::{
     logger,
     tracing::{self, instrument},
@@ -9,11 +10,12 @@ use router_env::{
 
 use super::{call_connector_payout, PayoutData};
 use crate::{
+    consts,
     core::{
+        configs::dimension_state,
         errors::{self, RouterResult, StorageErrorExt},
         payouts,
     },
-    db::StorageInterface,
     routes::{self, app, metrics},
     types::{api, domain, storage},
     utils,
@@ -23,11 +25,12 @@ use crate::{
 #[allow(clippy::too_many_arguments)]
 pub async fn do_gsm_multiple_connector_actions(
     state: &app::SessionState,
-    mut connectors: IntoIter<api::ConnectorData>,
+    mut connectors_routing_data: IntoIter<api::ConnectorRoutingData>,
     original_connector_data: api::ConnectorData,
     payout_data: &mut PayoutData,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    platform: &domain::Platform,
+    dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
+    header_payload: HeaderPayload,
 ) -> RouterResult<()> {
     let mut retries = None;
 
@@ -39,11 +42,12 @@ pub async fn do_gsm_multiple_connector_actions(
         let gsm = get_gsm(state, &connector, payout_data).await?;
 
         match get_gsm_decision(gsm) {
-            api_models::gsm::GsmDecision::Retry => {
+            common_enums::GsmDecision::Retry => {
                 retries = get_retries(
                     state,
                     retries,
-                    merchant_account.get_id(),
+                    dimensions,
+                    payout_data.payout_attempt.customer_id.as_ref(),
                     PayoutRetryType::MultiConnector,
                 )
                 .await;
@@ -54,33 +58,27 @@ pub async fn do_gsm_multiple_connector_actions(
                     break;
                 }
 
-                if connectors.len() == 0 {
+                if connectors_routing_data.len() == 0 {
                     logger::info!("connectors exhausted for auto_retry payout");
                     metrics::AUTO_PAYOUT_RETRY_EXHAUSTED_COUNT.add(1, &[]);
                     break;
                 }
 
-                connector = super::get_next_connector(&mut connectors)?;
+                connector = super::get_next_connector(&mut connectors_routing_data)?.connector_data;
 
                 Box::pin(do_retry(
                     &state.clone(),
                     connector.to_owned(),
-                    merchant_account,
-                    key_store,
+                    platform,
+                    header_payload.clone(),
                     payout_data,
+                    dimensions,
                 ))
                 .await?;
 
-                retries = retries.map(|i| i - 1);
+                retries = retries.map(|i| i.saturating_sub(1));
             }
-            api_models::gsm::GsmDecision::Requeue => {
-                Err(report!(errors::ApiErrorResponse::NotImplemented {
-                    message: errors::NotImplementedMessage::Reason(
-                        "Requeue not implemented".to_string(),
-                    ),
-                }))?
-            }
-            api_models::gsm::GsmDecision::DoDefault => break,
+            common_enums::GsmDecision::DoDefault => break,
         }
     }
     Ok(())
@@ -92,8 +90,9 @@ pub async fn do_gsm_single_connector_actions(
     state: &app::SessionState,
     original_connector_data: api::ConnectorData,
     payout_data: &mut PayoutData,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    platform: &domain::Platform,
+    dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
+    header_payload: HeaderPayload,
 ) -> RouterResult<()> {
     let mut retries = None;
 
@@ -105,17 +104,18 @@ pub async fn do_gsm_single_connector_actions(
         let gsm = get_gsm(state, &original_connector_data, payout_data).await?;
 
         // if the error config is same as previous, we break out of the loop
-        if let Ordering::Equal = gsm.cmp(&previous_gsm) {
+        if gsm == previous_gsm {
             break;
         }
         previous_gsm.clone_from(&gsm);
 
         match get_gsm_decision(gsm) {
-            api_models::gsm::GsmDecision::Retry => {
+            common_enums::GsmDecision::Retry => {
                 retries = get_retries(
                     state,
                     retries,
-                    merchant_account.get_id(),
+                    dimensions,
+                    payout_data.payout_attempt.customer_id.as_ref(),
                     PayoutRetryType::SingleConnector,
                 )
                 .await;
@@ -129,22 +129,16 @@ pub async fn do_gsm_single_connector_actions(
                 Box::pin(do_retry(
                     &state.clone(),
                     original_connector_data.to_owned(),
-                    merchant_account,
-                    key_store,
+                    platform,
+                    header_payload.clone(),
                     payout_data,
+                    dimensions,
                 ))
                 .await?;
 
-                retries = retries.map(|i| i - 1);
+                retries = retries.map(|i| i.saturating_sub(1));
             }
-            api_models::gsm::GsmDecision::Requeue => {
-                Err(report!(errors::ApiErrorResponse::NotImplemented {
-                    message: errors::NotImplementedMessage::Reason(
-                        "Requeue not implemented".to_string(),
-                    ),
-                }))?
-            }
-            api_models::gsm::GsmDecision::DoDefault => break,
+            common_enums::GsmDecision::DoDefault => break,
         }
     }
     Ok(())
@@ -153,30 +147,24 @@ pub async fn do_gsm_single_connector_actions(
 #[instrument(skip_all)]
 pub async fn get_retries(
     state: &app::SessionState,
-    retries: Option<i32>,
-    merchant_id: &common_utils::id_type::MerchantId,
+    retries: Option<u32>,
+    dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
+    customer_id: Option<&common_utils::id_type::CustomerId>,
     retry_type: PayoutRetryType,
-) -> Option<i32> {
+) -> Option<u32> {
     match retries {
         Some(retries) => Some(retries),
         None => {
-            let key = merchant_id.get_max_auto_single_connector_payout_retries_enabled(retry_type);
-            let db = &*state.store;
-            db.find_config_by_key(key.as_str())
-                .await
-                .change_context(errors::ApiErrorResponse::InternalServerError)
-                .and_then(|retries_config| {
-                    retries_config
-                        .config
-                        .parse::<i32>()
-                        .change_context(errors::ApiErrorResponse::InternalServerError)
-                        .attach_printable("Retries config parsing failed")
-                })
-                .map_err(|err| {
-                    logger::error!(retries_error=?err);
-                    None::<i32>
-                })
-                .ok()
+            let storage = state.store.as_ref();
+            let superposition_client = state.superposition_service.as_ref();
+
+            let dimensions = dimensions.with_payout_retry_type(retry_type);
+
+            let retries = dimensions
+                .get_max_auto_payout_retries(storage, superposition_client, customer_id)
+                .await;
+
+            Some(retries)
         }
     }
 }
@@ -186,7 +174,7 @@ pub async fn get_gsm(
     state: &app::SessionState,
     original_connector_data: &api::ConnectorData,
     payout_data: &PayoutData,
-) -> RouterResult<Option<storage::gsm::GatewayStatusMap>> {
+) -> RouterResult<Option<hyperswitch_domain_models::gsm::GatewayStatusMap>> {
     let error_code = payout_data.payout_attempt.error_code.to_owned();
     let error_message = payout_data.payout_attempt.error_message.to_owned();
     let connector_name = Some(original_connector_data.connector_name.to_string());
@@ -197,25 +185,16 @@ pub async fn get_gsm(
         error_message,
         connector_name,
         common_utils::consts::PAYOUT_FLOW_STR,
+        consts::DEFAULT_SUBFLOW_STR,
     )
     .await)
 }
 
 #[instrument(skip_all)]
 pub fn get_gsm_decision(
-    option_gsm: Option<storage::gsm::GatewayStatusMap>,
-) -> api_models::gsm::GsmDecision {
-    let option_gsm_decision = option_gsm
-            .and_then(|gsm| {
-                api_models::gsm::GsmDecision::from_str(gsm.decision.as_str())
-                    .map_err(|err| {
-                        let api_error = report!(err).change_context(errors::ApiErrorResponse::InternalServerError)
-                            .attach_printable("gsm decision parsing failed");
-                        logger::warn!(get_gsm_decision_parse_error=?api_error, "error fetching gsm decision");
-                        api_error
-                    })
-                    .ok()
-            });
+    option_gsm: Option<hyperswitch_domain_models::gsm::GatewayStatusMap>,
+) -> common_enums::GsmDecision {
+    let option_gsm_decision = option_gsm.map(|gsm| gsm.feature_data.get_decision());
 
     if option_gsm_decision.is_some() {
         metrics::AUTO_PAYOUT_RETRY_GSM_MATCH_COUNT.add(1, &[]);
@@ -228,20 +207,22 @@ pub fn get_gsm_decision(
 pub async fn do_retry(
     state: &routes::SessionState,
     connector: api::ConnectorData,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
+    platform: &domain::Platform,
+    header_payload: HeaderPayload,
     payout_data: &mut PayoutData,
+    dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
 ) -> RouterResult<()> {
     metrics::AUTO_RETRY_PAYOUT_COUNT.add(1, &[]);
 
-    modify_trackers(state, &connector, merchant_account, payout_data).await?;
+    modify_trackers(state, &connector, platform, payout_data).await?;
 
     Box::pin(call_connector_payout(
         state,
-        merchant_account,
-        key_store,
+        platform,
+        header_payload,
         &connector,
         payout_data,
+        dimensions,
     ))
     .await
 }
@@ -250,7 +231,7 @@ pub async fn do_retry(
 pub async fn modify_trackers(
     state: &routes::SessionState,
     connector: &api::ConnectorData,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payout_data: &mut PayoutData,
 ) -> RouterResult<()> {
     let new_attempt_count = payout_data.payouts.attempt_count + 1;
@@ -269,18 +250,25 @@ pub async fn modify_trackers(
             &payout_data.payouts,
             updated_payouts,
             &payout_data.payout_attempt,
-            merchant_account.storage_scheme,
+            platform.get_processor().get_account().storage_scheme,
         )
         .await
         .change_context(errors::ApiErrorResponse::InternalServerError)
         .attach_printable("Error updating payouts")?;
 
-    let payout_attempt_id =
-        utils::get_payout_attempt_id(payout_id.to_owned(), payout_data.payouts.attempt_count);
+    let payout_attempt_id = utils::get_payout_attempt_id(
+        payout_id.get_string_repr(),
+        payout_data.payouts.attempt_count,
+    );
 
     let payout_attempt_req = storage::PayoutAttemptNew {
+        connector_eligibility_reference_id: None,
         payout_attempt_id: payout_attempt_id.to_string(),
         payout_id: payout_id.to_owned(),
+        merchant_order_reference_id: payout_data
+            .payout_attempt
+            .merchant_order_reference_id
+            .clone(),
         customer_id: payout_data.payout_attempt.customer_id.to_owned(),
         connector: Some(connector.connector_name.to_string()),
         merchant_id: payout_data.payout_attempt.merchant_id.to_owned(),
@@ -304,12 +292,21 @@ pub async fn modify_trackers(
             .payout_attempt
             .additional_payout_method_data
             .to_owned(),
+        payout_connector_metadata: None,
+        processor_merchant_id: payout_data.payout_attempt.processor_merchant_id.clone(),
+        created_by: payout_data.payout_attempt.created_by.clone(),
+        source_bank_data_token: payout_data.payout_attempt.source_bank_data_token.clone(),
+        additional_source_bank_data: payout_data
+            .payout_attempt
+            .additional_source_bank_data
+            .clone(),
+        connector_request_reference_id: None,
     };
     payout_data.payout_attempt = db
         .insert_payout_attempt(
             payout_attempt_req,
             &payouts,
-            merchant_account.storage_scheme,
+            platform.get_processor().get_account().storage_scheme,
         )
         .await
         .to_duplicate_response(errors::ApiErrorResponse::DuplicatePayout { payout_id })
@@ -321,21 +318,19 @@ pub async fn modify_trackers(
 }
 
 pub async fn config_should_call_gsm_payout(
-    db: &dyn StorageInterface,
-    merchant_id: &common_utils::id_type::MerchantId,
+    state: &app::SessionState,
+    dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
     retry_type: PayoutRetryType,
+    customer_id: Option<&common_utils::id_type::CustomerId>,
 ) -> bool {
-    let key = merchant_id.get_should_call_gsm_payout_key(retry_type);
-    let config = db
-        .find_config_by_key_unwrap_or(key.as_str(), Some("false".to_string()))
-        .await;
-    match config {
-        Ok(conf) => conf.config == "true",
-        Err(error) => {
-            logger::error!(?error);
-            false
-        }
-    }
+    let dimensions = dimensions.with_payout_retry_type(retry_type);
+    dimensions
+        .get_gsm_payout_call(
+            state.store.as_ref(),
+            state.superposition_service.as_ref(),
+            customer_id,
+        )
+        .await
 }
 
 pub trait GsmValidation {
@@ -355,6 +350,7 @@ impl GsmValidation for PayoutData {
             | common_enums::PayoutStatus::Reversed
             | common_enums::PayoutStatus::Expired
             | common_enums::PayoutStatus::Ineligible
+            | common_enums::PayoutStatus::NotPermitted
             | common_enums::PayoutStatus::RequiresCreation
             | common_enums::PayoutStatus::RequiresPayoutMethodData
             | common_enums::PayoutStatus::RequiresVendorAccountCreation

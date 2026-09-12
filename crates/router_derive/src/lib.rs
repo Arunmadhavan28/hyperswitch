@@ -764,3 +764,130 @@ pub fn derive_to_encryption_attr(input: proc_macro::TokenStream) -> proc_macro::
         .unwrap_or_else(|err| err.into_compile_error())
         .into()
 }
+
+/// Attribute macro that generates `apply_changeset` on the annotated struct.
+///
+/// Place `#[apply_changeset(target = TargetType)]` on an update struct.
+/// The macro re-emits the struct unchanged and generates:
+///
+/// ```ignore
+/// impl UpdateStruct {
+///     pub fn apply_changeset(self, mut target: TargetType) -> TargetType { ... }
+/// }
+/// ```
+///
+/// For every field:
+/// - `Option<T>` fields use a helper trait that writes `Some(v)` into the target
+///   field when the update value is `Some`, leaving it untouched on `None`.
+/// - Non-`Option` fields are directly assigned (`target.field = self.field`).
+///
+/// # Example
+///
+/// ```ignore
+/// use router_derive::apply_changeset;
+///
+/// #[apply_changeset(target = PaymentAttempt)]
+/// struct PaymentAttemptUpdateInternal {
+///     status: Option<AttemptStatus>,
+///     amount: Option<MinorUnit>,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn apply_changeset(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let args = proc_macro2::TokenStream::from(args);
+    let input = proc_macro2::TokenStream::from(input);
+    macros::apply_changeset_attribute(args, input)
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+/// schema attributes specifying constraints like minimum and maximum lengths.
+///
+/// This macro generates a `validate()` method that checks if string based fields
+/// meet the length requirements specified in their schema attributes.
+///
+/// ## Supported Types
+///   - Option<T> or T: where T: String or Url
+///
+/// ## Supported Schema Attributes
+///
+/// - `min_length`: Specifies the minimum allowed character length
+/// - `max_length`: Specifies the maximum allowed character length
+///
+/// ## Example
+///
+/// ```
+/// use utoipa::ToSchema;
+/// use router_derive::ValidateSchema;
+/// use url::Url;
+///
+/// #[derive(Default, ToSchema, ValidateSchema)]
+/// pub struct PaymentRequest {
+///     #[schema(min_length = 10, max_length = 255)]
+///     pub description: String,
+///
+///     #[schema(example = "https://example.com/return", max_length = 255)]
+///     pub return_url: Option<Url>,
+///
+///     // Field without constraints
+///     pub amount: u64,
+/// }
+///
+/// let payment = PaymentRequest {
+///     description: "Too short".to_string(),
+///     return_url: Some(Url::parse("https://very-long-domain.com/callback").unwrap()),
+///     amount: 1000,
+/// };
+///
+/// let validation_result = payment.validate();
+/// assert!(validation_result.is_err());
+/// assert_eq!(
+///     validation_result.unwrap_err(),
+///     "description must be at least 10 characters long. Received 9 characters"
+/// );
+/// ```
+///
+/// ## Notes
+/// - For `Option` fields, validation is only performed when the value is `Some`
+/// - Fields without schema attributes or with unsupported types are ignored
+/// - The validation stops on the first error encountered
+/// - The generated `validate()` method returns `Ok(())` if all validations pass, or
+///   `Err(String)` with an error message if any validations fail.
+#[proc_macro_derive(ValidateSchema, attributes(schema))]
+pub fn validate_schema(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    macros::validate_schema_derive(input)
+        .unwrap_or_else(|error| error.into_compile_error())
+        .into()
+}
+
+/// Derives `From<{StructName}New>` for the struct by mapping fields with matching names.
+///
+/// Assumes the `New` type follows the `{StructName}New` naming convention.
+#[proc_macro_derive(FromNew)]
+pub fn from_new_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    macros::from_new_derive_inner(ast)
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
+/// Derives code to validate if `String` or `Option<String>` fields contain potential XSS or SQLi.
+///
+/// This macro generates a `validate_xss_or_sqli(&self) -> Result<(), String>` method that checks
+/// fields of type `String` or `Option<String>` for potential XSS or SQLi attack vectors using
+/// `common_utils::validation::contains_potential_xss_or_sqli`.
+///
+/// Fields can be ignored from validation by annotating them with `#[xss_clean(skip)]`.
+#[proc_macro_derive(ValidateXSSOrSQLi, attributes(xss_clean))]
+pub fn validate_xss_or_sqli(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+
+    macros::validate_xss_or_sqli_derive(input)
+        .unwrap_or_else(|error| error.into_compile_error())
+        .into()
+}

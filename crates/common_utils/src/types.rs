@@ -3,17 +3,21 @@ pub mod keymanager;
 
 /// Enum for Authentication Level
 pub mod authentication;
-/// Enum for Theme Lineage
-pub mod theme;
+/// User related types
+pub mod user;
 
 /// types that are wrappers around primitive types
 pub mod primitive_wrappers;
+
+/// List-query pagination and sorting types
+pub mod list;
 
 use std::{
     borrow::Cow,
     fmt::Display,
     iter::Sum,
-    ops::{Add, Mul, Sub},
+    num::{NonZeroI64, NonZeroU8},
+    ops::{Add, Div, Mul, Sub},
     primitive::i64,
     str::FromStr,
 };
@@ -45,24 +49,26 @@ use utoipa::ToSchema;
 
 use crate::{
     consts::{
-        self, MAX_DESCRIPTION_LENGTH, MAX_STATEMENT_DESCRIPTOR_LENGTH, PUBLISHABLE_KEY_LENGTH,
+        self, MAX_BLOCKLIST_LOOKUP_DATA_LENGTH, MAX_DESCRIPTION_LENGTH,
+        MAX_STATEMENT_DESCRIPTOR_LENGTH, PUBLISHABLE_KEY_LENGTH,
     },
     errors::{CustomResult, ParsingError, PercentageError, ValidationError},
     fp_utils::when,
+    id_type, impl_enum_str,
 };
 
 /// Represents Percentage Value between 0 and 100 both inclusive
-#[derive(Clone, Default, Debug, PartialEq, Serialize)]
+#[derive(Clone, Default, Debug, PartialEq, Serialize, ToSchema)]
 pub struct Percentage<const PRECISION: u8> {
     // this value will range from 0 to 100, decimal length defined by precision macro
     /// Percentage value ranging between 0 and 100
-    percentage: f32,
+    percentage: f64,
 }
 
 fn get_invalid_percentage_error_message(precision: u8) -> String {
     format!(
-        "value should be a float between 0 to 100 and precise to only upto {} decimal digits",
-        precision
+        "value should be a float between 0 to 100 and precise to only upto {precision} decimal digits",
+
     )
 }
 
@@ -72,7 +78,7 @@ impl<const PRECISION: u8> Percentage<PRECISION> {
         if Self::is_valid_string_value(&value)? {
             Ok(Self {
                 percentage: value
-                    .parse::<f32>()
+                    .parse::<f64>()
                     .change_context(PercentageError::InvalidPercentageValue)?,
             })
         } else {
@@ -81,7 +87,7 @@ impl<const PRECISION: u8> Percentage<PRECISION> {
         }
     }
     /// function to get percentage value
-    pub fn get_percentage(&self) -> f32 {
+    pub fn get_percentage(&self) -> f64 {
         self.percentage
     }
 
@@ -100,12 +106,10 @@ impl<const PRECISION: u8> Percentage<PRECISION> {
                 amount: MinorUnit::new(amount),
             }))
             .attach_printable(format!(
-                "Cannot calculate percentage for amount greater than {}",
-                max_amount
+                "Cannot calculate percentage for amount greater than {max_amount}",
             ))
         } else {
-            let percentage_f64 = f64::from(self.percentage);
-            let result = (amount as f64 * (percentage_f64 / 100.0)).ceil() as i64;
+            let result = (amount as f64 * (self.percentage / 100.0)).ceil() as i64;
             Ok(MinorUnit::new(result))
         }
     }
@@ -114,18 +118,18 @@ impl<const PRECISION: u8> Percentage<PRECISION> {
         let float_value = Self::is_valid_float_string(value)?;
         Ok(Self::is_valid_range(float_value) && Self::is_valid_precision_length(value))
     }
-    fn is_valid_float_string(value: &str) -> CustomResult<f32, PercentageError> {
+    fn is_valid_float_string(value: &str) -> CustomResult<f64, PercentageError> {
         value
-            .parse::<f32>()
+            .parse::<f64>()
             .change_context(PercentageError::InvalidPercentageValue)
     }
-    fn is_valid_range(value: f32) -> bool {
+    fn is_valid_range(value: f64) -> bool {
         (0.0..=100.0).contains(&value)
     }
     fn is_valid_precision_length(value: &str) -> bool {
         if value.contains('.') {
             // if string has '.' then take the decimal part and verify precision length
-            match value.split('.').last() {
+            match value.split('.').next_back() {
                 Some(decimal_part) => {
                     decimal_part.trim_end_matches('0').len() <= <u8 as Into<usize>>::into(PRECISION)
                 }
@@ -167,7 +171,7 @@ impl<'de, const PRECISION: u8> Visitor<'de> for PercentageVisitor<PRECISION> {
             let string_value = value.to_string();
             Ok(Percentage::from_string(string_value.clone()).map_err(|_| {
                 serde::de::Error::invalid_value(
-                    serde::de::Unexpected::Other(&format!("percentage value {}", string_value)),
+                    serde::de::Unexpected::Other(&format!("percentage value {string_value}")),
                     &&*get_invalid_percentage_error_message(PRECISION),
                 )
             })?)
@@ -381,6 +385,7 @@ impl AmountConvertor for MinorUnitForConnector {
     Hash,
     ToSchema,
     PartialOrd,
+    Ord,
 )]
 #[diesel(sql_type = sql_types::BigInt)]
 pub struct MinorUnit(i64);
@@ -399,6 +404,11 @@ impl MinorUnit {
     /// forms a new minor unit from amount
     pub fn new(value: i64) -> Self {
         Self(value)
+    }
+
+    /// checks if the amount is greater than the given value
+    pub fn is_greater_than(&self, value: i64) -> bool {
+        self.get_amount_as_i64() > value
     }
 
     /// Convert the amount to its major denomination based on Currency and return String
@@ -420,7 +430,7 @@ impl MinorUnit {
     }
 
     /// Convert the amount to its major denomination based on Currency and return f64
-    fn to_major_unit_as_f64(
+    pub fn to_major_unit_as_f64(
         self,
         currency: enums::Currency,
     ) -> Result<FloatMajorUnit, error_stack::Report<ParsingError>> {
@@ -443,6 +453,12 @@ impl MinorUnit {
     ///Convert minor unit to string minor unit
     fn to_minor_unit_as_string(self) -> Result<StringMinorUnit, error_stack::Report<ParsingError>> {
         Ok(StringMinorUnit::new(self.0.to_string()))
+    }
+}
+
+impl From<NonZeroI64> for MinorUnit {
+    fn from(val: NonZeroI64) -> Self {
+        Self::new(val.get())
     }
 }
 
@@ -507,6 +523,14 @@ impl Mul<u16> for MinorUnit {
     }
 }
 
+impl Div<NonZeroU8> for MinorUnit {
+    type Output = Self;
+
+    fn div(self, a2: NonZeroU8) -> Self::Output {
+        Self(self.0 / i64::from(a2.get()))
+    }
+}
+
 impl Sum for MinorUnit {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(Self(0), |a, b| a + b)
@@ -514,7 +538,20 @@ impl Sum for MinorUnit {
 }
 
 /// Connector specific types to send
-#[derive(Default, Debug, serde::Deserialize, serde::Serialize, Clone, PartialEq)]
+#[derive(
+    Default,
+    Debug,
+    serde::Deserialize,
+    AsExpression,
+    serde::Serialize,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    ToSchema,
+    PartialOrd,
+)]
+#[diesel(sql_type = sql_types::Text)]
 pub struct StringMinorUnit(String);
 
 impl StringMinorUnit {
@@ -538,6 +575,45 @@ impl StringMinorUnit {
     }
 }
 
+impl Display for StringMinorUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<DB> FromSql<sql_types::Text, DB> for StringMinorUnit
+where
+    DB: Backend,
+    String: FromSql<sql_types::Text, DB>,
+{
+    fn from_sql(value: DB::RawValue<'_>) -> deserialize::Result<Self> {
+        let val = String::from_sql(value)?;
+        Ok(Self(val))
+    }
+}
+
+impl<DB> ToSql<sql_types::Text, DB> for StringMinorUnit
+where
+    DB: Backend,
+    String: ToSql<sql_types::Text, DB>,
+{
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, DB>) -> diesel::serialize::Result {
+        self.0.to_sql(out)
+    }
+}
+
+impl<DB> Queryable<sql_types::Text, DB> for StringMinorUnit
+where
+    DB: Backend,
+    Self: FromSql<sql_types::Text, DB>,
+{
+    type Row = Self;
+
+    fn build(row: Self::Row) -> deserialize::Result<Self> {
+        Ok(row)
+    }
+}
+
 /// Connector specific types to send
 #[derive(Default, Debug, serde::Deserialize, serde::Serialize, Clone, Copy, PartialEq)]
 pub struct FloatMajorUnit(f64);
@@ -551,6 +627,11 @@ impl FloatMajorUnit {
     /// forms a new major unit with zero amount
     pub fn zero() -> Self {
         Self(0.0)
+    }
+
+    /// gets amount as i64
+    pub fn get_amount_as_f64(self) -> f64 {
+        self.0
     }
 
     /// converts to minor unit as i64 from FloatMajorUnit
@@ -616,6 +697,10 @@ impl StringMajorUnit {
     /// Get string amount from struct to be removed in future
     pub fn get_amount_as_string(&self) -> String {
         self.0.clone()
+    }
+    /// forms a new default 2-decimal major unit
+    pub fn zero_decimal() -> Self {
+        Self("0.00".to_string())
     }
 }
 
@@ -686,261 +771,6 @@ where
     }
 }
 
-#[cfg(feature = "v2")]
-pub use client_secret_type::ClientSecret;
-#[cfg(feature = "v2")]
-mod client_secret_type {
-    use std::fmt;
-
-    use masking::PeekInterface;
-    use router_env::logger;
-
-    use super::*;
-    use crate::id_type;
-
-    /// A domain type that can be used to represent a client secret
-    /// Client secret is generated for a payment and is used to authenticate the client side api calls
-    #[derive(Debug, PartialEq, Clone, AsExpression)]
-    #[diesel(sql_type = sql_types::Text)]
-    pub struct ClientSecret {
-        /// The payment id of the payment
-        pub payment_id: id_type::GlobalPaymentId,
-        /// The secret string
-        pub secret: masking::Secret<String>,
-    }
-
-    impl ClientSecret {
-        pub(crate) fn get_string_repr(&self) -> String {
-            format!(
-                "{}_secret_{}",
-                self.payment_id.get_string_repr(),
-                self.secret.peek()
-            )
-        }
-
-        /// Create a new client secret
-        pub(crate) fn new(payment_id: id_type::GlobalPaymentId, secret: String) -> Self {
-            Self {
-                payment_id,
-                secret: masking::Secret::new(secret),
-            }
-        }
-    }
-
-    impl FromStr for ClientSecret {
-        type Err = ParsingError;
-
-        fn from_str(str_value: &str) -> Result<Self, Self::Err> {
-            let (payment_id, secret) =
-                str_value
-                    .rsplit_once("_secret_")
-                    .ok_or(ParsingError::EncodeError(
-                        "Expected a string in the format '{payment_id}_secret_{secret}'",
-                    ))?;
-
-            let payment_id = id_type::GlobalPaymentId::try_from(Cow::Owned(payment_id.to_owned()))
-                .map_err(|err| {
-                    logger::error!(global_payment_id_error=?err);
-                    ParsingError::EncodeError("Error while constructing GlobalPaymentId")
-                })?;
-
-            Ok(Self {
-                payment_id,
-                secret: masking::Secret::new(secret.to_owned()),
-            })
-        }
-    }
-
-    impl<'de> Deserialize<'de> for ClientSecret {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            struct ClientSecretVisitor;
-
-            impl Visitor<'_> for ClientSecretVisitor {
-                type Value = ClientSecret;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter.write_str("a string in the format '{payment_id}_secret_{secret}'")
-                }
-
-                fn visit_str<E>(self, value: &str) -> Result<ClientSecret, E>
-                where
-                    E: serde::de::Error,
-                {
-                    let (payment_id, secret) = value.rsplit_once("_secret_").ok_or_else(|| {
-                        E::invalid_value(
-                            serde::de::Unexpected::Str(value),
-                            &"a string with '_secret_'",
-                        )
-                    })?;
-
-                    let payment_id =
-                        id_type::GlobalPaymentId::try_from(Cow::Owned(payment_id.to_owned()))
-                            .map_err(serde::de::Error::custom)?;
-
-                    Ok(ClientSecret {
-                        payment_id,
-                        secret: masking::Secret::new(secret.to_owned()),
-                    })
-                }
-            }
-
-            deserializer.deserialize_str(ClientSecretVisitor)
-        }
-    }
-
-    impl Serialize for ClientSecret {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::ser::Serializer,
-        {
-            serializer.serialize_str(self.get_string_repr().as_str())
-        }
-    }
-
-    impl ToSql<sql_types::Text, diesel::pg::Pg> for ClientSecret
-    where
-        String: ToSql<sql_types::Text, diesel::pg::Pg>,
-    {
-        fn to_sql<'b>(
-            &'b self,
-            out: &mut Output<'b, '_, diesel::pg::Pg>,
-        ) -> diesel::serialize::Result {
-            let string_repr = self.get_string_repr();
-            <String as ToSql<sql_types::Text, diesel::pg::Pg>>::to_sql(
-                &string_repr,
-                &mut out.reborrow(),
-            )
-        }
-    }
-
-    impl<DB> FromSql<sql_types::Text, DB> for ClientSecret
-    where
-        DB: Backend,
-        String: FromSql<sql_types::Text, DB>,
-    {
-        fn from_sql(value: DB::RawValue<'_>) -> deserialize::Result<Self> {
-            let string_repr = String::from_sql(value)?;
-            let (payment_id, secret) =
-                string_repr
-                    .rsplit_once("_secret_")
-                    .ok_or(ParsingError::EncodeError(
-                        "Expected a string in the format '{payment_id}_secret_{secret}'",
-                    ))?;
-
-            let payment_id = id_type::GlobalPaymentId::try_from(Cow::Owned(payment_id.to_owned()))
-                .map_err(|err| {
-                    logger::error!(global_payment_id_error=?err);
-                    ParsingError::EncodeError("Error while constructing GlobalPaymentId")
-                })?;
-
-            Ok(Self {
-                payment_id,
-                secret: masking::Secret::new(secret.to_owned()),
-            })
-        }
-    }
-
-    impl<DB> Queryable<sql_types::Text, DB> for ClientSecret
-    where
-        DB: Backend,
-        Self: FromSql<sql_types::Text, DB>,
-    {
-        type Row = Self;
-
-        fn build(row: Self::Row) -> deserialize::Result<Self> {
-            Ok(row)
-        }
-    }
-    crate::impl_serializable_secret_id_type!(ClientSecret);
-    #[cfg(test)]
-    mod client_secret_tests {
-        #![allow(clippy::expect_used)]
-        #![allow(clippy::unwrap_used)]
-
-        use serde_json;
-
-        use super::*;
-        use crate::id_type::GlobalPaymentId;
-
-        #[test]
-        fn test_serialize_client_secret() {
-            let global_payment_id = "12345_pay_1a961ed9093c48b09781bf8ab17ba6bd";
-            let secret = "fc34taHLw1ekPgNh92qr".to_string();
-
-            let expected_client_secret_string = format!("\"{global_payment_id}_secret_{secret}\"");
-
-            let client_secret1 = ClientSecret {
-                payment_id: GlobalPaymentId::try_from(Cow::Borrowed(global_payment_id)).unwrap(),
-                secret: masking::Secret::new(secret),
-            };
-
-            let parsed_client_secret =
-                serde_json::to_string(&client_secret1).expect("Failed to serialize client_secret1");
-
-            assert_eq!(expected_client_secret_string, parsed_client_secret);
-        }
-
-        #[test]
-        fn test_deserialize_client_secret() {
-            // This is a valid global id
-            let global_payment_id_str = "12345_pay_1a961ed9093c48b09781bf8ab17ba6bd";
-            let secret = "fc34taHLw1ekPgNh92qr".to_string();
-
-            let valid_payment_global_id =
-                GlobalPaymentId::try_from(Cow::Borrowed(global_payment_id_str))
-                    .expect("Failed to create valid global payment id");
-
-            // This is an invalid global id because of the cell id being in invalid length
-            let invalid_global_payment_id = "123_pay_1a961ed9093c48b09781bf8ab17ba6bd";
-
-            // Create a client secret string which is valid
-            let valid_client_secret = format!(r#""{global_payment_id_str}_secret_{secret}""#);
-
-            dbg!(&valid_client_secret);
-
-            // Create a client secret string which is invalid
-            let invalid_client_secret_because_of_invalid_payment_id =
-                format!(r#""{invalid_global_payment_id}_secret_{secret}""#);
-
-            // Create a client secret string which is invalid because of invalid secret
-            let invalid_client_secret_because_of_invalid_secret =
-                format!(r#""{invalid_global_payment_id}""#);
-
-            let valid_client_secret = serde_json::from_str::<ClientSecret>(&valid_client_secret)
-                .expect("Failed to deserialize client_secret_str1");
-
-            let invalid_deser1 = serde_json::from_str::<ClientSecret>(
-                &invalid_client_secret_because_of_invalid_payment_id,
-            );
-
-            dbg!(&invalid_deser1);
-
-            let invalid_deser2 = serde_json::from_str::<ClientSecret>(
-                &invalid_client_secret_because_of_invalid_secret,
-            );
-
-            dbg!(&invalid_deser2);
-
-            assert_eq!(valid_client_secret.payment_id, valid_payment_global_id);
-
-            assert_eq!(valid_client_secret.secret.peek(), &secret);
-
-            assert_eq!(
-                invalid_deser1.err().unwrap().to_string(),
-                "Incorrect value provided for field: payment_id at line 1 column 70"
-            );
-
-            assert_eq!(
-                invalid_deser2.err().unwrap().to_string(),
-                "invalid value: string \"123_pay_1a961ed9093c48b09781bf8ab17ba6bd\", expected a string with '_secret_' at line 1 column 42"
-            );
-        }
-    }
-}
-
 /// A type representing a range of time for filtering, including a mandatory start time and an optional end time.
 #[derive(
     Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash, ToSchema,
@@ -958,7 +788,6 @@ pub struct TimeRange {
 
 #[cfg(test)]
 mod amount_conversion_tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     const TWO_DECIMAL_CURRENCY: enums::Currency = enums::Currency::USD;
     const THREE_DECIMAL_CURRENCY: enums::Currency = enums::Currency::BHD;
@@ -1193,6 +1022,20 @@ impl Description {
 #[diesel(sql_type = sql_types::Text)]
 pub struct StatementDescriptor(LengthString<MAX_STATEMENT_DESCRIPTOR_LENGTH, 1>);
 
+/// Domain type for a blocklist lookup value - a card BIN or a locker fingerprint id.
+///
+/// Length is enforced on deserialization, so a value too long to ever match a `fingerprint_id` is
+/// rejected at the API boundary rather than reaching a query.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct BlocklistLookupData(LengthString<MAX_BLOCKLIST_LOOKUP_DATA_LENGTH, 1>);
+
+impl BlocklistLookupData {
+    /// Get the string representation of the lookup value
+    pub fn get_string_repr(&self) -> &str {
+        &self.0 .0
+    }
+}
+
 impl<DB> Queryable<sql_types::Text, DB> for Description
 where
     DB: Backend,
@@ -1423,10 +1266,138 @@ pub struct BrowserInformation {
 
     /// Accept-language of the browser
     pub accept_language: Option<String>,
+
+    /// Identifier of the source that initiated the request.
+    pub referer: Option<String>,
 }
 
 #[cfg(feature = "v2")]
 crate::impl_to_sql_from_sql_json!(BrowserInformation);
+
+/// A single co-badge / secondary network entry enriched from the Pagos BIN data.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SecondaryNetwork {
+    /// The co-badged network (e.g. NYCE, PULSE, CULIANCE). Always present.
+    pub card_network: common_enums::CoBadgedCardNetwork,
+
+    /// PAN vs token on this rail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_iin_type: Option<String>,
+    /// Whether bill-pay is enabled on this rail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billpay_enabled: Option<bool>,
+    /// Card subtype on this rail (issuer product name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_subtype: Option<String>,
+    /// Network card subtype code on this rail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_subtype_code: Option<String>,
+    /// Rail operator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_issuer: Option<String>,
+    /// Whether e-commerce transactions are enabled on this rail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecom_enabled: Option<bool>,
+    /// Card type on this rail (e.g. credit, debit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_type: Option<String>,
+    /// ISO 3166-1 alpha-2 country code for this rail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+}
+
+/// Co-badged card networks for a card BIN, stored as a JSONB array of [`SecondaryNetwork`] objects
+/// in the `co_badged_card_networks` column of `cards_info`. The newtype is serde-transparent, so it
+/// serializes/deserializes as a plain JSON array.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = Jsonb)]
+pub struct CoBadgedCardNetworkMetadata(pub Vec<SecondaryNetwork>);
+
+crate::impl_to_sql_from_sql_json!(CoBadgedCardNetworkMetadata);
+
+/// A single interchange cap entry within the [`CardCost`] array. All values are kept as strings.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ToSchema)]
+pub struct InterchangeCap {
+    /// An abbreviated region name where the interchange cap applies
+    #[schema(example = "Dom")]
+    pub cap_region_shortname: Option<String>,
+    /// The interchange percentage assessed, shown in decimals for the capped interchange
+    #[schema(example = "0.002")]
+    pub cap_advalorem_amount: Option<String>,
+    /// The name of the regulated interchange cap
+    #[schema(example = "US Durbin Regulation Debit Visa")]
+    pub cap_type_name: Option<String>,
+    /// If a fixed or regulated interchange amount applies, the amount will be shown here
+    #[schema(example = "0.21")]
+    pub cap_fixed_amount: Option<String>,
+    /// The currency of the qualified fixed_amount for the regulated or capped interchange
+    #[schema(example = "usd")]
+    pub cap_type_qualifier_currency: Option<String>,
+    /// The description of the interchange cap or regulation
+    #[schema(example = "US Durbin Regulation Debit Visa")]
+    pub cap_type_qualifier_text: Option<String>,
+    /// The minimum merchant processing volume amount limit for the interchange cap
+    #[schema(example = "101mm")]
+    pub cap_type_qualifier_lower: Option<String>,
+    /// The maximum merchant processing volume amount limit for the interchange cap
+    #[schema(example = "500mm")]
+    pub cap_type_qualifier_upper: Option<String>,
+}
+
+/// The `cost` column of `cards_info` — a JSON array of interchange caps.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = Jsonb)]
+pub struct CardCost(pub Vec<InterchangeCap>);
+
+crate::impl_to_sql_from_sql_json!(CardCost);
+
+/// A single customer-authentication requirement within the [`CardAuthentication`] array.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ToSchema)]
+pub struct AuthenticationInfo {
+    /// If additional customer authentication is required, this indicates the authentication program
+    /// name; hardcoded based on issuer-country law.
+    #[schema(example = "EU PSD2 - SCA")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication_name: Option<String>,
+}
+
+/// The `authentication` column of `cards_info` — a JSON array of required authentication programs.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    FromSqlRow,
+    AsExpression,
+)]
+#[diesel(sql_type = Jsonb)]
+pub struct CardAuthentication(pub Vec<AuthenticationInfo>);
+
+crate::impl_to_sql_from_sql_json!(CardAuthentication);
+
 /// Domain type for connector_transaction_id
 /// Maximum length for connector's transaction_id can be 128 characters in HS DB.
 /// In case connector's use an identifier whose length exceeds 128 characters,
@@ -1459,6 +1430,14 @@ impl ConnectorTransactionId {
         }
     }
 
+    /// Implementation for extracting hashed data
+    pub fn extract_hashed_data(&self) -> Option<String> {
+        match self {
+            Self::TxnId(_) => None,
+            Self::HashedData(src) => Some(src.clone()),
+        }
+    }
+
     /// Implementation for retrieving
     pub fn get_txn_id<'a>(
         &'a self,
@@ -1471,8 +1450,7 @@ impl ConnectorTransactionId {
                 message: "processor_transaction_data is empty for HashedData variant".to_string(),
             })
             .attach_printable(format!(
-                "processor_transaction_data is empty for connector_transaction_id {}",
-                id
+                "processor_transaction_data is empty for connector_transaction_id {id}",
             ))),
         }
     }
@@ -1490,7 +1468,7 @@ impl From<String> for ConnectorTransactionId {
             hasher.update(src.as_bytes());
             hasher.finalize_xof().fill(&mut output);
             let hash = hex::encode(output);
-            Self::HashedData(format!("hs_hash_{}", hash))
+            Self::HashedData(format!("hs_hash_{hash}"))
         // Default
         } else {
             Self::TxnId(src)
@@ -1561,7 +1539,8 @@ pub struct PublishableKey(LengthString<PUBLISHABLE_KEY_LENGTH, PUBLISHABLE_KEY_L
 impl PublishableKey {
     /// Create a new PublishableKey Domain type without any length check from a static str
     pub fn generate(env_prefix: &'static str) -> Self {
-        let publishable_key_string = format!("pk_{env_prefix}_{}", uuid::Uuid::now_v7().simple());
+        let publishable_key_string =
+            format!("pk_{env_prefix}_{}", crate::generate_uuid_v7().simple());
         Self(LengthString::new_unchecked(publishable_key_string))
     }
 
@@ -1602,4 +1581,65 @@ where
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, DB>) -> diesel::serialize::Result {
         self.0.to_sql(out)
     }
+}
+
+impl_enum_str!(
+    tag_delimiter = ":",
+    /// CreatedBy conveys the information about the creator (identifier) as well as the origin or
+    /// trigger (Api, Jwt) of the record.
+    #[derive(Eq, PartialEq, Debug, Clone)]
+    pub enum CreatedBy {
+        /// Api variant
+        Api {
+            /// merchant id of creator.
+            merchant_id: String,
+        },
+        /// Jwt variant
+        Jwt {
+            /// user id of creator.
+            user_id: String,
+        },
+        /// EmbeddedToken variant
+        EmbeddedToken {
+            /// merchant id of creator.
+            merchant_id: String,
+        },
+        /// AccountUpdater variant, for writes made while applying a reported card change
+        AccountUpdater {
+            /// account updater service that reported the change.
+            service: String,
+        },
+    }
+);
+
+impl CreatedBy {
+    /// Returns `true` if the creator is the provider (platform) merchant, i.e. an API-triggered
+    /// creation whose `merchant_id` matches `provider_merchant_id`.
+    pub fn is_provider_initiated(&self, provider_merchant_id: &id_type::MerchantId) -> bool {
+        match self {
+            Self::Api { merchant_id } => id_type::MerchantId::wrap(merchant_id.clone())
+                .map(|parsed_merchant_id| parsed_merchant_id == *provider_merchant_id)
+                .unwrap_or_default(),
+            Self::Jwt { .. }
+            | Self::Invalid
+            | Self::EmbeddedToken { .. }
+            | Self::AccountUpdater { .. } => false,
+        }
+    }
+}
+
+/// Trait for enums created with `impl_enum_str!` macro that have an `Invalid` variant.
+/// This trait allows generic functions to check if a parsed enum value is invalid.
+pub trait HasInvalidVariant {
+    /// Returns true if this instance is the `Invalid` variant
+    fn is_invalid(&self) -> bool;
+}
+
+#[allow(missing_docs)]
+pub trait TenantConfig: Send + Sync {
+    fn get_tenant_id(&self) -> &id_type::TenantId;
+    fn get_schema(&self) -> &str;
+    fn get_accounts_schema(&self) -> &str;
+    fn get_redis_key_prefix(&self) -> &str;
+    fn get_clickhouse_database(&self) -> &str;
 }

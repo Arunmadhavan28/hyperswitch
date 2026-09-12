@@ -56,6 +56,18 @@ pub enum Flow {
     HealthCheck,
     /// Deep health Check
     DeepHealthCheck,
+    /// Offer Engine connectivity check (dev/admin only)
+    OfferEngineConnectivityCheck,
+    /// Browse the offers available to a merchant
+    OfferEngineBrowseOffers,
+    /// OIDC Discovery endpoint
+    OidcDiscovery,
+    /// OIDC JWKS endpoint
+    OidcJwks,
+    /// OIDC Authorize endpoint
+    OidcAuthorize,
+    /// OIDC Token endpoint
+    OidcToken,
     /// Organization create flow
     OrganizationCreate,
     /// Organization retrieve flow
@@ -84,6 +96,12 @@ pub enum Flow {
     MerchantConnectorsList,
     /// Merchant Transfer Keys
     MerchantTransferKey,
+    /// Merchant Connector Webhook register flow.
+    MerchantConnectorWebhookRegister,
+    /// Merchant Connector Webhook list flow.
+    MerchantConnectorWebhookList,
+    /// Merchant Connector Webhook HMAC key generation flow.
+    MerchantConnectorWebhookGenerateSecret,
     /// ConfigKey create flow.
     ConfigKeyCreate,
     /// ConfigKey fetch flow.
@@ -98,12 +116,16 @@ pub enum Flow {
     CustomersCreate,
     /// Customers retrieve flow.
     CustomersRetrieve,
+    /// Customers retrieve by reference id flow.
+    CustomersRetrieveByReferenceId,
     /// Customers update flow.
     CustomersUpdate,
     /// Customers delete flow.
     CustomersDelete,
     /// Customers get mandates flow.
     CustomersGetMandates,
+    /// Customers global id migration flow.
+    CustomersGlobalIdMigration,
     /// Create an Ephemeral Key.
     EphemeralKeyCreate,
     /// Delete an Ephemeral Key.
@@ -118,24 +140,42 @@ pub enum Flow {
     PaymentMethodsCreate,
     /// Payment methods migrate flow.
     PaymentMethodsMigrate,
+    /// Modular Payment methods migrate flow.
+    ModularPaymentMethodsMigrate,
+    /// Payment methods batch update flow.
+    PaymentMethodsBatchUpdate,
+    /// Payment methods batch retrieve flow.
+    PaymentMethodsBatchRetrieve,
     /// Payment methods list flow.
     PaymentMethodsList,
     /// Payment method save flow
     PaymentMethodSave,
+    /// Get token details using temporary token
+    PaymentMethodGetTokenDetails,
     /// Customer payment methods list flow.
     CustomerPaymentMethodsList,
+    /// Payment methods token data get flow.
+    GetPaymentMethodTokenData,
     /// List Customers for a merchant
     CustomersList,
+    ///List Customers for a merchant with constraints.
+    CustomersListWithConstraints,
     /// Retrieve countries and currencies for connector and payment method
     ListCountriesCurrencies,
     /// Payment method create collect link flow.
     PaymentMethodCollectLink,
     /// Payment methods retrieve flow.
     PaymentMethodsRetrieve,
+    /// Payment methods retrieve OLAP flow.
+    PaymentMethodsRetrieveOlap,
     /// Payment methods update flow.
     PaymentMethodsUpdate,
     /// Payment methods delete flow.
     PaymentMethodsDelete,
+    /// Network token status check flow.
+    NetworkTokenStatusCheck,
+    /// Network token eligibility check flow.
+    NetworkTokenEligibilityCheck,
     /// Default Payment method flow.
     DefaultPaymentMethodsSet,
     /// Payments create flow.
@@ -154,6 +194,10 @@ pub enum Flow {
     PaymentsCapture,
     /// Payments cancel flow.
     PaymentsCancel,
+    /// Payments cancel post capture flow.
+    PaymentsCancelPostCapture,
+    /// Payments cancel post capture sync flow.
+    PaymentsCancelPostCaptureSync,
     /// Payments approve flow.
     PaymentsApprove,
     /// Payments reject flow.
@@ -178,6 +222,8 @@ pub enum Flow {
     PaymentsConfirmIntent,
     /// Payments create and confirm intent flow
     PaymentsCreateAndConfirmIntent,
+    /// Payment attempt list flow
+    PaymentAttemptsList,
     #[cfg(feature = "payouts")]
     /// Payouts create flow
     PayoutsCreate,
@@ -217,6 +263,8 @@ pub enum Flow {
     RefundsRetrieveForceSync,
     /// Refunds update flow.
     RefundsUpdate,
+    /// Refunds reverse flow.
+    RefundsReverse,
     /// Refunds list flow.
     RefundsList,
     /// Refunds filters flow
@@ -225,14 +273,6 @@ pub enum Flow {
     RefundsAggregate,
     // Retrieve forex flow.
     RetrieveForexFlow,
-    /// Toggles recon service for a merchant.
-    ReconMerchantUpdate,
-    /// Recon token request flow.
-    ReconTokenRequest,
-    /// Initial request for recon service.
-    ReconServiceRequest,
-    /// Recon token verification flow
-    ReconVerifyToken,
     /// Routing create flow,
     RoutingCreateConfig,
     /// Routing link config
@@ -241,22 +281,58 @@ pub enum Flow {
     RoutingUnlinkConfig,
     /// Routing retrieve config
     RoutingRetrieveConfig,
+    /// Decision engine merchant SSO redirect
+    DecisionEngineSsoRedirect,
     /// Routing retrieve active config
     RoutingRetrieveActiveConfig,
     /// Routing retrieve default config
     RoutingRetrieveDefaultConfig,
     /// Routing retrieve dictionary
     RoutingRetrieveDictionary,
+    /// Rule migration for decision-engine
+    DecisionEngineRuleMigration,
+    /// Migration status report for decision-engine
+    DecisionEngineMigrationStatus,
     /// Routing update config
     RoutingUpdateConfig,
     /// Routing update default config
     RoutingUpdateDefaultConfig,
     /// Routing delete config
     RoutingDeleteConfig,
+    /// Subscription create flow,
+    CreateSubscription,
+    /// Subscription get items flow,
+    GetSubscriptionItemsForSubscription,
+    /// Subscription confirm flow,
+    ConfirmSubscription,
+    /// Subscription create and confirm flow,
+    CreateAndConfirmSubscription,
+    /// Get Subscription flow
+    GetSubscription,
+    /// Update Subscription flow
+    UpdateSubscription,
+    /// Get Subscription estimate flow
+    GetSubscriptionEstimate,
+    /// Pause Subscription flow
+    PauseSubscription,
+    /// Resume Subscription flow
+    ResumeSubscription,
+    /// Cancel Subscription flow
+    CancelSubscription,
+    /// Create dynamic routing
+    CreateDynamicRoutingConfig,
     /// Toggle dynamic routing
     ToggleDynamicRouting,
     /// Update dynamic routing config
     UpdateDynamicRoutingConfigs,
+    /// Add a card issuer to the catalog
+    AddCardIssuer,
+    /// Update a card issuer in the catalog
+    UpdateCardIssuer,
+    /// Delete a card issuer from the catalog
+    DeleteCardIssuer,
+    /// List card issuers from the catalog
+    ListCardIssuers,
     /// Add record to blocklist
     AddToBlocklist,
     /// Delete record from blocklist
@@ -265,6 +341,18 @@ pub enum Flow {
     ListBlocklist,
     /// Toggle blocklist for merchant
     ToggleBlocklistGuard,
+    /// Bulk upload blocklist entries via CSV
+    BatchBlocklistUpload,
+    /// Get status of a batch blocklist upload job
+    GetBatchBlocklistJobStatus,
+    /// List batch blocklist upload jobs for a merchant
+    ListBatchBlocklistJobs,
+    /// Get blocklist entry counts, broken down by fingerprint length
+    GetBlocklistCount,
+    /// Look up whether a value is present in the blocklist
+    LookupBlocklistEntry,
+    /// Start a CSV export of the blocklist
+    CreateBlocklistExport,
     /// Incoming Webhook Receive
     IncomingWebhookReceive,
     /// Recovery incoming webhook receive
@@ -319,6 +407,8 @@ pub enum Flow {
     PaymentLinkList,
     /// Payment Link Status
     PaymentLinkStatus,
+    /// Payment Link Create flow
+    PaymentLinkCreate,
     /// Create a profile
     ProfileCreate,
     /// Update a profile
@@ -343,10 +433,14 @@ pub enum Flow {
     ApplePayCertificatesMigration,
     /// Gsm Rule Delete flow
     GsmRuleDelete,
+    /// Mint a sage session for the dashboard user.
+    LaunchSage,
     /// User Sign Up
     UserSignUp,
     /// User Sign Up
     UserSignUpWithMerchantId,
+    /// Convert Organization to Platform
+    ConvertOrganizationToPlatform,
     /// User Sign In
     UserSignIn,
     /// User transfer key
@@ -403,10 +497,14 @@ pub enum Flow {
     GetRoleFromToken,
     /// Get resources and groups for role from token
     GetRoleFromTokenV2,
+    /// Get parent groups info for role from token
+    GetParentGroupsInfoForRoleFromToken,
     /// Update user role
     UpdateUserRole,
     /// Create merchant account for user in a org
     UserMerchantAccountCreate,
+    /// Create Platform
+    CreatePlatformAccount,
     /// Create Org in a given tenancy
     UserOrgMerchantCreate,
     /// Generate Sample Data
@@ -437,6 +535,8 @@ pub enum Flow {
     DeleteUserRole,
     /// Incremental Authorization flow
     PaymentsIncrementalAuthorization,
+    /// Extend Authorization flow
+    PaymentsExtendAuthorization,
     /// Get action URL for connector onboarding
     GetActionUrl,
     /// Sync connector onboarding status
@@ -459,6 +559,8 @@ pub enum Flow {
     PaymentsAuthorize,
     /// Create Role
     CreateRole,
+    /// Create Role V2
+    CreateRoleV2,
     /// Update Role
     UpdateRole,
     /// User email flow start
@@ -495,6 +597,8 @@ pub enum Flow {
     ListOrgForUser,
     /// List Merchants for user in org
     ListMerchantsForUserInOrg,
+    /// Get merchant account details for the user (product_type, merchant_account_type)
+    GetUserMerchantDetails,
     /// List Profile for user in org and merchant
     ListProfileForUserInOrgAndMerchant,
     /// List Users in Org
@@ -513,6 +617,22 @@ pub enum Flow {
     UpdateTheme,
     /// Delete theme
     DeleteTheme,
+    /// Create user theme
+    CreateUserTheme,
+    /// Update user theme
+    UpdateUserTheme,
+    /// Delete user theme
+    DeleteUserTheme,
+    /// Upload file to user theme storage
+    UploadFileToUserThemeStorage,
+    /// Get user theme using theme id
+    GetUserThemeUsingThemeId,
+    ///List All Themes In Lineage
+    ListAllThemesInLineage,
+    /// Get user theme using lineage
+    GetUserThemeUsingLineage,
+    /// Get user theme version
+    GetUserThemeConfigVersion,
     /// List initial webhook delivery attempts
     WebhookEventInitialDeliveryAttemptList,
     /// List delivery attempts for a webhook event
@@ -531,19 +651,36 @@ pub enum Flow {
     RefundsManualUpdate,
     /// Manually update the payment details like status, error code, error message etc.
     PaymentsManualUpdate,
+    /// Manually update payment status from dashboard (Review → Succeeded/Failed)
+    PaymentsManualStatusUpdate,
+    #[cfg(feature = "payouts")]
+    /// Manually update the payout details like status, error code, error message etc.
+    PayoutsManualUpdate,
     /// Dynamic Tax Calcultion
     SessionUpdateTaxCalculation,
     ProxyConfirmIntent,
     /// Payments post session tokens flow
     PaymentsPostSessionTokens,
+    /// Payments Update Metadata
+    PaymentsUpdateMetadata,
     /// Payments start redirection flow
     PaymentStartRedirection,
     /// Volume split on the routing type
     VolumeSplitOnRoutingType,
+    /// Routing evaluate rule flow
+    RoutingEvaluateRule,
+    /// Reset the Decision Engine routing diff kill-switch counter for a profile
+    DecisionEngineDiffCounterReset,
+    /// Report whether the Unified Connector Service kill switch has tripped a scope
+    UnifiedConnectorServiceKillSwitchStatus,
+    /// Clear a Unified Connector Service kill switch cutover
+    UnifiedConnectorServiceKillSwitchReset,
     /// Relay flow
     Relay,
     /// Relay retrieve flow
     RelayRetrieve,
+    /// Relay unreferenced refund flow
+    RelayUnreferencedRefund,
     /// Card tokenization flow
     TokenizeCard,
     /// Card tokenization using payment method flow
@@ -558,6 +695,8 @@ pub enum Flow {
     HypersenseVerifyToken,
     /// Signout Hypersense Token
     HypersenseSignoutToken,
+    /// Validate a dashboard token on behalf of an external service
+    ExternalServiceValidateToken,
     /// Payment Method Session Create
     PaymentMethodSessionCreate,
     /// Payment Method Session Retrieve
@@ -566,6 +705,8 @@ pub enum Flow {
     PaymentMethodSessionUpdate,
     /// Update a saved payment method using the payment methods session
     PaymentMethodSessionUpdateSavedPaymentMethod,
+    /// Delete a saved payment method using the payment methods session
+    PaymentMethodSessionDeleteSavedPaymentMethod,
     /// Confirm a payment method session with payment method data
     PaymentMethodSessionConfirm,
     /// Create Cards Info flow
@@ -576,6 +717,98 @@ pub enum Flow {
     CardsInfoMigrate,
     ///Total payment method count for merchant
     TotalPaymentMethodCount,
+    /// Process Tracker Revenue Recovery Workflow Retrieve
+    RevenueRecoveryRetrieve,
+    /// Process Tracker Revenue Recovery Workflow Resume
+    RevenueRecoveryResume,
+    /// Tokenization flow
+    TokenizationCreate,
+    /// Tokenization retrieve flow
+    TokenizationRetrieve,
+    /// Clone Connector flow
+    CloneConnector,
+    /// Authentication Create flow
+    AuthenticationCreate,
+    /// Authentication Eligibility flow
+    AuthenticationEligibility,
+    /// Authentication Sync flow
+    AuthenticationSync,
+    /// Authentication Sync Post Update flow
+    AuthenticationSyncPostUpdate,
+    /// Authentication Authenticate flow
+    AuthenticationAuthenticate,
+    /// Authentication Session Token flow
+    AuthenticationSessionToken,
+    /// Authentication Eligibility Check flow
+    AuthenticationEligibilityCheck,
+    /// Authentication Retrieve Eligibility Check flow
+    AuthenticationRetrieveEligibilityCheck,
+    ///Proxy Flow
+    Proxy,
+    /// Profile Acquirer Create flow
+    ProfileAcquirerCreate,
+    /// Profile Acquirer Update flow
+    ProfileAcquirerUpdate,
+    /// ThreeDs Decision Rule Execute flow
+    ThreeDsDecisionRuleExecute,
+    /// Incoming Network Token Webhook Receive
+    IncomingNetworkTokenWebhookReceive,
+    /// Decision Engine Decide Gateway Call
+    DecisionEngineDecideGatewayCall,
+    /// Decision Engine Gateway Feedback Call
+    DecisionEngineGatewayFeedbackCall,
+    /// Recovery payments create flow.
+    RecoveryPaymentsCreate,
+    /// Tokenization delete flow
+    TokenizationDelete,
+    /// Payment method data backfill flow
+    RecoveryDataBackfill,
+    /// Revenue recovery retry stats admin migration (CSV upload)
+    RecoveryRetryStatsMigration,
+    /// Revenue recovery Redis operations flow
+    RevenueRecoveryRedis,
+    /// Payment Method balance check flow
+    PaymentMethodBalanceCheck,
+    /// Payments Submit Eligibility Check flow
+    PaymentsSubmitCheckEligibility,
+    /// Payments Submit Eligibility flow (combined eligibility + external surcharge)
+    PaymentsSubmitEligibility,
+    /// Apply payment method data flow
+    ApplyPaymentMethodData,
+    /// Payouts aggregates flow
+    PayoutsAggregate,
+    // Get embedded token flow
+    GetEmbeddedToken,
+    // Get embedded token info flow
+    EmbeddedTokenInfo,
+    /// Superposition SDK Config Get flow
+    GetSuperpositionSdkConfig,
+    /// Superposition Proxy Get Context List flow
+    SuperpositionListContexts,
+    /// Superposition Proxy Get Default Configs List flow
+    SuperpositionListDefaultConfigs,
+    /// Superposition Proxy Get Dimensions List flow
+    SuperpositionListDimensions,
+    /// Superposition Proxy Get Dimension flow
+    SuperpositionGetDimension,
+    /// Superposition Proxy Get Default Config flow
+    SuperpositionGetDefaultConfig,
+    /// Superposition Proxy Create Context flow
+    SuperpositionCreateContext,
+    /// Superposition Proxy Resolve Detailed Config flow
+    SuperpositionResolveDetailedConfig,
+    /// Superposition Proxy Resolve Config Explanation flow
+    SuperpositionResolveConfigExplanation,
+    /// Superposition Proxy List Audit Logs flow
+    SuperpositionListAuditLogs,
+    // Get user details internal
+    GetUserDetailsInternal,
+    // List users internal
+    ListUsersInternal,
+    // List members for entity
+    ListMembersForEntity,
+    /// Authorize external token
+    AuthorizeUserToken,
 }
 
 /// Trait for providing generic behaviour to flow metric

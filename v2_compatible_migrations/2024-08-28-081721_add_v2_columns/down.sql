@@ -6,11 +6,9 @@ ALTER TABLE customers DROP COLUMN IF EXISTS merchant_reference_id,
     DROP COLUMN IF EXISTS status;
 
 ALTER TABLE business_profile DROP COLUMN routing_algorithm_id,
-    DROP COLUMN order_fulfillment_time,
     DROP COLUMN order_fulfillment_time_origin,
     DROP COLUMN frm_routing_algorithm_id,
     DROP COLUMN payout_routing_algorithm_id,
-    DROP COLUMN default_fallback_routing,
     DROP COLUMN should_collect_cvv_during_payment,
     DROP COLUMN three_ds_decision_manager_config;
 
@@ -53,3 +51,8 @@ ALTER TABLE payment_methods
     DROP COLUMN IF EXISTS locker_fingerprint_id,
     DROP COLUMN IF EXISTS payment_method_type_v2,
     DROP COLUMN IF EXISTS payment_method_subtype;
+
+ALTER TABLE refund
+    DROP COLUMN IF EXISTS id,
+    DROP COLUMN IF EXISTS merchant_reference_id,
+    DROP COLUMN IF EXISTS connector_id;

@@ -11,7 +11,7 @@
   "phone_country_code": "+65",
   "description": "Its my first payment request",
   "authentication_type": "no_three_ds",
-  "return_url": "https://hyperswitch.io",
+  "return_url": "https://example.com",
   "setup_future_usage": "on_session",
   "customer_acceptance": {
     "acceptance_type": "offline",
@@ -25,11 +25,11 @@
   "payment_method_type": "debit",
   "payment_method_data": {
     "card": {
-      "card_number": "4242424242424242",
-      "card_exp_month": "01",
-      "card_exp_year": "50",
+      "card_number": "4111111111111111",
+      "card_exp_month": "03",
+      "card_exp_year": "30",
       "card_holder_name": "joseph Doe",
-      "card_cvc": "123"
+      "card_cvc": "737"
     }
   },
   "billing": {

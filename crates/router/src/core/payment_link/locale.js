@@ -3,11 +3,11 @@ The languages supported by locale.js are:
  1) English (en)
  2) Hebrew (he)
  3) French (fr)
- 4) British English (en_gb)
+ 4) British English (en-gb)
  5) Arabic (ar)
  6) Japanese (ja)
  7) German (de)
- 8) Belgian French (fr_be)
+ 8) Belgian French (fr-be)
  9) Spanish (es)
  10) Catalan (ca)
  11) Portuguese (pt)
@@ -17,7 +17,7 @@ The languages supported by locale.js are:
  15) Swedish (sv)
  16) Russian (ru)
  17) Chinese (zh)
- 19) Traditional Chinese (zh_hant)
+ 19) Traditional Chinese (zh-hant)
 */
 const locales = {
     en: {
@@ -25,6 +25,8 @@ const locales = {
       refId: "Ref Id: ",
       requestedBy: "Requested by ",
       payNow: "Pay now",
+      addPaymentMethod: "Add Payment Method",
+      authorizePayment: "Authorize Payment",
       yourCart: "Your Cart",
       quantity: "Quantity",
       showLess: "Show Less",
@@ -56,6 +58,8 @@ const locales = {
       refId: "מזהה הפניה: ",
       requestedBy: "ביקש על ידי ",
       payNow: "שלם עכשיו",
+      addPaymentMethod: "הוסף אמצעי תשלום",
+      authorizePayment: "אשר תשלום",
       yourCart: "העגלה שלך",
       quantity: "כמות",
       showLess: "הצג פחות",
@@ -87,6 +91,8 @@ const locales = {
       refId: "ID de référence: ",
       requestedBy: "Demandé par ",
       payNow: "Payer maintenant",
+      addPaymentMethod: "Ajouter un mode de paiement",
+      authorizePayment: "Autoriser le paiement",
       yourCart: "Votre panier",
       quantity: "Quantité",
       showLess: "Afficher moins",
@@ -113,11 +119,13 @@ const locales = {
       errorCode: "Code d'erreur",
       errorMessage: "Message d'erreur"
     },
-    en_gb: {
+    "en-gb": {
       expiresOn: "Link expires on: ",
       refId: "Ref Id: ",
       requestedBy: "Requested by ",
       payNow: "Pay now",
+      addPaymentMethod: "Add Payment Method",
+      authorizePayment: "Authorise Payment",
       yourCart: "Your Basket",
       quantity: "Quantity",
       showLess: "Show Less",
@@ -143,13 +151,14 @@ const locales = {
       notAllowed: "You are not allowed to view this content.",
       errorCode: "Error code",
       errorMessage: "Error Message"
-      
     },
     ar: {
       expiresOn: "الرابط ينتهي في: ",
       refId: "معرف المرجع: ",
       requestedBy: "طلب بواسطة ",
       payNow: "ادفع الآن",
+      addPaymentMethod: "إضافة طريقة دفع",
+      authorizePayment: "تفويض الدفع",
       yourCart: "سلة التسوق الخاصة بك",
       quantity: "الكمية",
       showLess: "عرض أقل",
@@ -181,6 +190,8 @@ const locales = {
       refId: "参照 ID: ",
       requestedBy: "リクエスト者 ",
       payNow: "今すぐ支払う",
+      addPaymentMethod: "支払い方法を追加",
+      authorizePayment: "支払いを承認する",
       yourCart: "あなたのカート",
       quantity: "数量",
       showLess: "表示を減らす",
@@ -212,6 +223,8 @@ const locales = {
       refId: "Referenz-ID: ",
       requestedBy: "Angefordert von ",
       payNow: "Jetzt bezahlen",
+      addPaymentMethod: "Zahlungsmethode hinzufügen",
+      authorizePayment: "Zahlung autorisieren",
       yourCart: "Ihr Warenkorb",
       quantity: "Menge",
       showLess: "Weniger anzeigen",
@@ -238,11 +251,13 @@ const locales = {
       errorCode: "Fehlercode",
       errorMessage: "Fehlermeldung"
     },
-    fr_be: {
+    "fr-be": {
       expiresOn: "Le lien expire le: ",
       refId: "ID de référence: ",
       requestedBy: "Demandé par ",
       payNow: "Payer maintenant",
+      addPaymentMethod: "Ajouter un mode de paiement",
+      authorizePayment: "Autoriser le paiement",
       yourCart: "Votre panier",
       quantity: "Quantité",
       showLess: "Afficher moins",
@@ -268,13 +283,14 @@ const locales = {
       notAllowed: "Vous n'êtes pas autorisé à voir ce contenu.",
       errorCode: "Code d'erreur",
       errorMessage: "Message d'erreur"
-      
     },
     es: {
       expiresOn: "El enlace expira el: ",
       refId: "ID de referencia: ",
       requestedBy: "Solicitado por ",
       payNow: "Pagar ahora",
+      addPaymentMethod: "Agregar método de pago",
+      authorizePayment: "Autorizar pago",
       yourCart: "Tu carrito",
       quantity: "Cantidad",
       showLess: "Mostrar menos",
@@ -306,6 +322,8 @@ const locales = {
       refId: "ID de referència: ",
       requestedBy: "Sol·licitat per ",
       payNow: "Paga ara",
+      addPaymentMethod: "Afegir mètode de pagament",
+      authorizePayment: "Autoritza el pagament",
       yourCart: "El teu carret",
       quantity: "Quantitat",
       showLess: "Mostrar menys",
@@ -337,6 +355,8 @@ const locales = {
       refId: "ID de referência: ",
       requestedBy: "Solicitado por ",
       payNow: "Pagar agora",
+      addPaymentMethod: "Adicionar método de pagamento",
+      authorizePayment: "Autorizar pagamento",
       yourCart: "Seu Carrinho",
       quantity: "Quantidade",
       showLess: "Mostrar menos",
@@ -362,13 +382,14 @@ const locales = {
       notAllowed: "Você não tem permissão para ver este conteúdo.",
       errorCode: "Código de erro",
       errorMessage: "Mensagem de erro"
-
     },
     it: {
       expiresOn: "Link scade il: ",
       refId: "ID di riferimento: ",
       requestedBy: "Richiesto da ",
       payNow: "Paga ora",
+      addPaymentMethod: "Aggiungi metodo di pagamento",
+      authorizePayment: "Autorizza il pagamento",
       yourCart: "Il tuo carrello",
       quantity: "Quantità",
       showLess: "Mostra meno",
@@ -400,6 +421,8 @@ const locales = {
       refId: "Identyfikator referencyjny: ",
       requestedBy: "Zażądane przez ",
       payNow: "Zapłać teraz",
+      addPaymentMethod: "Dodaj metodę płatności",
+      authorizePayment: "Autoryzuj płatność",
       yourCart: "Twój koszyk",
       quantity: "Ilość",
       showLess: "Pokaż mniej",
@@ -431,6 +454,8 @@ const locales = {
       refId: "Ref Id: ",
       requestedBy: "Aangevraagd door ",
       payNow: "Nu betalen",
+      addPaymentMethod: "Betaalmethode toevoegen",
+      authorizePayment: "Betaling autoriseren",
       yourCart: "Je winkelwagen",
       quantity: "Hoeveelheid",
       showLess: "Toon minder",
@@ -462,6 +487,8 @@ const locales = {
       refId: "Referens-ID: ",
       requestedBy: "Begärd av ",
       payNow: "Betala nu",
+      addPaymentMethod: "Lägg till betalningsmetod",
+      authorizePayment: "Auktorisera betalning",
       yourCart: "Din varukorg",
       quantity: "Antal",
       showLess: "Visa mindre",
@@ -493,6 +520,8 @@ const locales = {
       refId: "ID ссылки: ",
       requestedBy: "Запрошено ",
       payNow: "Оплатить сейчас",
+      addPaymentMethod: "Добавить способ оплаты",
+      authorizePayment: "Авторизовать платеж",
       yourCart: "Ваша корзина",
       quantity: "Количество",
       showLess: "Показать меньше",
@@ -524,6 +553,8 @@ const locales = {
       refId: "参考编号: ",
       requestedBy: "请求者: ",
       payNow: "立即付款",
+      addPaymentMethod: "添加支付方式",
+      authorizePayment: "授权付款",
       yourCart: "您的购物车",
       quantity: "数量",
       showLess: "显示较少",
@@ -550,11 +581,13 @@ const locales = {
       errorCode: "错误代码",
       errorMessage: "错误信息"
     },
-    zh_hant: {
+    "zh-hant": {
       expiresOn: "連結到期日期：",
       refId: "參考編號：",
       requestedBy: "請求者 ",
       payNow: "立即付款",
+      addPaymentMethod: "新增付款方式",
+      authorizePayment: "授權付款",
       yourCart: "你的購物車",
       quantity: "數量",
       showLess: "顯示較少",
@@ -564,7 +597,7 @@ const locales = {
       paymentTakingLonger: "抱歉！您的付款處理時間比預期長。請稍後再查看。",
       paymentLinkExpired: "付款連結已過期",
       paymentReceived: "我們已成功收到您的付款",
-      paymentLinkExpiredMessage: "抱歉，此付款連結已過期。請使用以下參考進行進一步調查。",
+      paymentLinkExpiredMessage: "抱歉，此付款連結已過期。 請使用以下參考進行進一步調查。",
       paidSuccessfully: "付款成功",
       paymentPending: "付款待處理",
       paymentFailed: "付款失敗！",
@@ -583,8 +616,26 @@ const locales = {
     },
   };
 
-  function getTranslations(locale_str) {
-    var fallback_locale = 'en';
-    var locale = locale_str.toLowerCase().replace(/-/g, "_") || fallback_locale; // defaults if locale is not present in payment details.
-    return locales[locale] || locales['en']; // defaults if locale is not implemented in locales.
+function getLanguage(localeStr) {
+  var fallback_locale = 'en';
+  var primaryLocale = (localeStr.toLowerCase() || fallback_locale).split(',')[0].trim();
+  
+  // Split into language and country parts
+  var parts = primaryLocale.split('-');
+  var language = parts[0];
+  var country = parts.length > 1 ? parts[1] : null;
+
+  var key = language + '-' + country;
+  switch (key) {
+    case 'en-gb': return 'en-gb';
+    case 'fr-be': return 'fr-be';
+    case 'zh-hant': return 'zh-hant';
+    default: return language;
   }
+}
+
+function getTranslations(localeStr) {
+  var fallback_locale = 'en';
+  var language = getLanguage(localeStr);
+  return locales[language] || locales[fallback_locale];
+}

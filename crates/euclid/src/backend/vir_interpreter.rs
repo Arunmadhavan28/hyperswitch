@@ -40,13 +40,15 @@ where
     }
 
     fn eval_statement(stmt: &vir::ValuedIfStatement, ctx: &types::Context) -> bool {
-        Self::eval_condition(&stmt.condition, ctx)
-            .then(|| {
-                stmt.nested.as_ref().map_or(true, |nested_stmts| {
+        if Self::eval_condition(&stmt.condition, ctx) {
+            {
+                stmt.nested.as_ref().is_none_or(|nested_stmts| {
                     nested_stmts.iter().any(|s| Self::eval_statement(s, ctx))
                 })
-            })
-            .unwrap_or(false)
+            }
+        } else {
+            false
+        }
     }
 
     fn eval_rule(rule: &vir::ValuedRule<O>, ctx: &types::Context) -> bool {
@@ -104,7 +106,6 @@ where
 }
 #[cfg(all(test, feature = "ast_parser"))]
 mod test {
-    #![allow(clippy::expect_used)]
     use common_utils::types::MinorUnit;
     use rustc_hash::FxHashMap;
 
@@ -132,7 +133,9 @@ mod test {
             metadata: None,
             payment: inputs::PaymentInput {
                 amount: MinorUnit::new(32),
+                transaction_initiator: None,
                 card_bin: None,
+                extended_card_bin: None,
                 currency: enums::Currency::USD,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
@@ -140,17 +143,22 @@ mod test {
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -171,26 +179,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: Some("123456".to_string()),
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: Some(enums::PaymentType::SetupMandate),
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -212,26 +227,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: Some("123456".to_string()),
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: Some(enums::PaymentType::PptMandate),
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -253,26 +275,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: Some("123456".to_string()),
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: Some(enums::MandateType::SingleUse),
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -294,26 +323,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: Some("123456".to_string()),
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: Some(enums::MandateAcceptanceType::Online),
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -335,26 +371,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: Some("123456".to_string()),
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -376,26 +419,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: None,
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -417,26 +467,33 @@ mod test {
         let inp = inputs::BackendInput {
             metadata: None,
             payment: inputs::PaymentInput {
+                transaction_initiator: None,
                 amount: MinorUnit::new(32),
                 currency: enums::Currency::USD,
                 card_bin: None,
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -459,27 +516,33 @@ mod test {
             metadata: None,
             payment: inputs::PaymentInput {
                 amount: MinorUnit::new(32),
+                transaction_initiator: None,
                 currency: enums::Currency::USD,
                 card_bin: None,
+                extended_card_bin: None,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
                 business_country: Some(enums::Country::UnitedStatesOfAmerica),
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: Some(enums::SetupFutureUsage::OffSession),
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
-
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
         let result = backend.execute(inp).expect("Execution");
         assert_eq!(result.rule_name.expect("Rule Name").as_str(), "rule_1");
@@ -502,7 +565,9 @@ mod test {
             metadata: Some(meta_map),
             payment: inputs::PaymentInput {
                 amount: MinorUnit::new(32),
+                transaction_initiator: None,
                 card_bin: None,
+                extended_card_bin: None,
                 currency: enums::Currency::USD,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
@@ -510,17 +575,22 @@ mod test {
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
 
         let backend = VirInterpreterBackend::<DummyOutput>::with_program(program).expect("Program");
@@ -543,7 +613,9 @@ mod test {
             metadata: None,
             payment: inputs::PaymentInput {
                 amount: MinorUnit::new(150),
+                transaction_initiator: None,
                 card_bin: None,
+                extended_card_bin: None,
                 currency: enums::Currency::USD,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
@@ -551,17 +623,22 @@ mod test {
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
         let mut inp_equal = inp_greater.clone();
         inp_equal.payment.amount = MinorUnit::new(123);
@@ -593,7 +670,9 @@ mod test {
             metadata: None,
             payment: inputs::PaymentInput {
                 amount: MinorUnit::new(120),
+                transaction_initiator: None,
                 card_bin: None,
+                extended_card_bin: None,
                 currency: enums::Currency::USD,
                 authentication_type: Some(enums::AuthenticationType::NoThreeDs),
                 capture_method: Some(enums::CaptureMethod::Automatic),
@@ -601,17 +680,22 @@ mod test {
                 billing_country: Some(enums::Country::France),
                 business_label: None,
                 setup_future_usage: None,
+                surcharge_amount: None,
             },
             payment_method: inputs::PaymentMethodInput {
                 payment_method: Some(enums::PaymentMethod::PayLater),
                 payment_method_type: Some(enums::PaymentMethodType::Affirm),
                 card_network: None,
+                card_discovery: None,
             },
             mandate: inputs::MandateData {
                 mandate_acceptance_type: None,
                 mandate_type: None,
                 payment_type: None,
             },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
         };
         let mut inp_equal = inp_lower.clone();
         inp_equal.payment.amount = MinorUnit::new(123);

@@ -1,4 +1,5 @@
 pub mod transformers;
+use std::{convert::TryFrom, sync::LazyLock};
 
 use common_enums::{enums, CallConnectorAction, PaymentAction};
 use common_utils::{
@@ -6,7 +7,10 @@ use common_utils::{
     errors::CustomResult,
     ext_traits::ByteSliceExt,
     request::{Method, Request, RequestBuilder, RequestContent},
-    types::{AmountConvertor, MinorUnit, MinorUnitForConnector},
+    types::{
+        AmountConvertor, MinorUnit, MinorUnitForConnector, StringMinorUnit,
+        StringMinorUnitForConnector,
+    },
 };
 use error_stack::ResultExt;
 use hyperswitch_domain_models::{
@@ -25,12 +29,13 @@ use hyperswitch_domain_models::{
         SyncRequestType, UploadFileRequestData,
     },
     router_response_types::{
-        AcceptDisputeResponse, DefendDisputeResponse, PaymentsResponseData, RefundsResponseData,
-        RetrieveFileResponse, SubmitEvidenceResponse, UploadFileResponse,
+        AcceptDisputeResponse, ConnectorInfo, DefendDisputeResponse, PaymentMethodDetails,
+        PaymentsResponseData, RefundsResponseData, RetrieveFileResponse, SubmitEvidenceResponse,
+        SupportedPaymentMethods, SupportedPaymentMethodsExt, UploadFileResponse,
     },
     types::{
         PaymentsAuthorizeRouterData, PaymentsCancelRouterData, PaymentsCaptureRouterData,
-        PaymentsSyncRouterData, RefundsRouterData, TokenizationRouterData,
+        PaymentsSyncRouterData, RefundsRouterData, SetupMandateRouterData, TokenizationRouterData,
     },
 };
 use hyperswitch_interfaces::{
@@ -49,11 +54,11 @@ use hyperswitch_interfaces::{
     types::{
         AcceptDisputeType, DefendDisputeType, PaymentsAuthorizeType, PaymentsCaptureType,
         PaymentsSyncType, PaymentsVoidType, RefundExecuteType, RefundSyncType, Response,
-        SubmitEvidenceType, TokenizationType, UploadFileType,
+        SetupMandateType, SubmitEvidenceType, TokenizationType, UploadFileType,
     },
     webhooks,
 };
-use masking::{Mask, Maskable, PeekInterface};
+use hyperswitch_masking::{Mask, Maskable, PeekInterface};
 use transformers::CheckoutErrorResponse;
 
 use self::transformers as checkout;
@@ -69,12 +74,14 @@ use crate::{
 #[derive(Clone)]
 pub struct Checkout {
     amount_converter: &'static (dyn AmountConvertor<Output = MinorUnit> + Sync),
+    amount_converter_webhooks: &'static (dyn AmountConvertor<Output = StringMinorUnit> + Sync),
 }
 
 impl Checkout {
     pub fn new() -> &'static Self {
         &Self {
             amount_converter: &MinorUnitForConnector,
+            amount_converter_webhooks: &StringMinorUnitForConnector,
         }
     }
 }
@@ -133,7 +140,7 @@ impl ConnectorCommon for Checkout {
         res: Response,
         event_builder: Option<&mut ConnectorEvent>,
     ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
-        let response: CheckoutErrorResponse = if res.response.is_empty() {
+        if res.response.is_empty() {
             let (error_codes, error_type) = if res.status_code == 401 {
                 (
                     Some(vec!["Invalid api key".to_string()]),
@@ -142,46 +149,81 @@ impl ConnectorCommon for Checkout {
             } else {
                 (None, None)
             };
-            CheckoutErrorResponse {
+            let response = CheckoutErrorResponse {
                 request_id: None,
-                error_codes,
-                error_type,
+                error_codes: error_codes.clone(),
+                error_type: error_type.clone(),
+            };
+            event_builder.map(|i| i.set_error_response_body(&response));
+            router_env::logger::info!(connector_response=?response);
+
+            return Ok(ErrorResponse {
+                status_code: res.status_code,
+                code: consts::NO_ERROR_CODE.to_string(),
+                message: consts::NO_ERROR_MESSAGE.to_string(),
+                reason: error_codes.map(|errors| errors.join(" & ")).or(error_type),
+                attempt_status: None,
+                connector_transaction_id: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
+            });
+        }
+
+        let response: Result<
+            CheckoutErrorResponse,
+            error_stack::Report<common_utils::errors::ParsingError>,
+        > = res.response.parse_struct("ErrorResponse");
+
+        match response {
+            Ok(response) => {
+                event_builder.map(|i| i.set_error_response_body(&response));
+                router_env::logger::info!(connector_response=?response);
+
+                let errors_list = response.error_codes.clone().unwrap_or_default();
+                let option_error_code_message =
+                    utils::get_error_code_error_message_based_on_priority(
+                        self.clone(),
+                        errors_list
+                            .into_iter()
+                            .map(|errors| errors.into())
+                            .collect(),
+                    );
+                Ok(ErrorResponse {
+                    status_code: res.status_code,
+                    code: option_error_code_message
+                        .clone()
+                        .map(|error_code_message| error_code_message.error_code)
+                        .unwrap_or(consts::NO_ERROR_CODE.to_string()),
+                    message: option_error_code_message
+                        .map(|error_code_message| error_code_message.error_message)
+                        .unwrap_or(consts::NO_ERROR_MESSAGE.to_string()),
+                    reason: response
+                        .error_codes
+                        .map(|errors| errors.join(" & "))
+                        .or(response.error_type),
+                    attempt_status: None,
+                    connector_transaction_id: response.request_id,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
+                })
             }
-        } else {
-            res.response
-                .parse_struct("ErrorResponse")
-                .change_context(errors::ConnectorError::ResponseDeserializationFailed)?
-        };
-
-        event_builder.map(|i| i.set_error_response_body(&response));
-        router_env::logger::info!(connector_response=?response);
-
-        let errors_list = response.error_codes.clone().unwrap_or_default();
-        let option_error_code_message = utils::get_error_code_error_message_based_on_priority(
-            self.clone(),
-            errors_list
-                .into_iter()
-                .map(|errors| errors.into())
-                .collect(),
-        );
-        Ok(ErrorResponse {
-            status_code: res.status_code,
-            code: option_error_code_message
-                .clone()
-                .map(|error_code_message| error_code_message.error_code)
-                .unwrap_or(consts::NO_ERROR_CODE.to_string()),
-            message: option_error_code_message
-                .map(|error_code_message| error_code_message.error_message)
-                .unwrap_or(consts::NO_ERROR_MESSAGE.to_string()),
-            reason: response
-                .error_codes
-                .map(|errors| errors.join(" & "))
-                .or(response.error_type),
-            attempt_status: None,
-            connector_transaction_id: response.request_id,
-            issuer_error_code: None,
-            issuer_error_message: None,
-        })
+            Err(error_msg) => {
+                event_builder.map(|event| {
+                    event.set_error(serde_json::json!({
+                        "error": res.response.escape_ascii().to_string(),
+                        "status_code": res.status_code,
+                    }))
+                });
+                router_env::logger::error!(deserialization_error =? error_msg);
+                utils::handle_json_response_deserialization_failure(res, "checkout")
+            }
+        }
     }
 }
 
@@ -324,16 +366,88 @@ impl MandateSetup for Checkout {}
 impl ConnectorIntegration<SetupMandate, SetupMandateRequestData, PaymentsResponseData>
     for Checkout
 {
-    // Issue: #173
+    fn get_headers(
+        &self,
+        req: &SetupMandateRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+        self.build_headers(req, connectors)
+    }
+
+    fn get_url(
+        &self,
+        _req: &SetupMandateRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        Ok(format!("{}{}", self.base_url(connectors), "payments"))
+    }
+
+    fn get_request_body(
+        &self,
+        req: &SetupMandateRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<RequestContent, errors::ConnectorError> {
+        let authorize_req = utils::convert_payment_authorize_router_response((
+            req,
+            utils::convert_setup_mandate_router_data_to_authorize_router_data(req),
+        ));
+
+        let amount = utils::convert_amount(
+            self.amount_converter,
+            authorize_req.request.minor_amount,
+            authorize_req.request.currency,
+        )?;
+
+        let connector_router_data = checkout::CheckoutRouterData::from((amount, &authorize_req));
+        let connector_req = checkout::PaymentsRequest::try_from(&connector_router_data)?;
+        Ok(RequestContent::Json(Box::new(connector_req)))
+    }
+
     fn build_request(
         &self,
-        _req: &RouterData<SetupMandate, SetupMandateRequestData, PaymentsResponseData>,
-        _connectors: &Connectors,
+        req: &SetupMandateRouterData,
+        connectors: &Connectors,
     ) -> CustomResult<Option<Request>, errors::ConnectorError> {
-        Err(
-            errors::ConnectorError::NotImplemented("Setup Mandate flow for Checkout".to_string())
-                .into(),
-        )
+        Ok(Some(
+            RequestBuilder::new()
+                .method(Method::Post)
+                .url(&SetupMandateType::get_url(self, req, connectors)?)
+                .attach_default_headers()
+                .headers(SetupMandateType::get_headers(self, req, connectors)?)
+                .set_body(SetupMandateType::get_request_body(self, req, connectors)?)
+                .build(),
+        ))
+    }
+
+    fn handle_response(
+        &self,
+        data: &SetupMandateRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<
+        RouterData<SetupMandate, SetupMandateRequestData, PaymentsResponseData>,
+        errors::ConnectorError,
+    > {
+        let response: checkout::PaymentsResponse = res
+            .response
+            .parse_struct("PaymentIntentResponse")
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+        RouterData::try_from(ResponseRouterData {
+            response,
+            data: data.clone(),
+            http_code: res.status_code,
+        })
+        .change_context(errors::ConnectorError::ResponseHandlingFailed)
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
     }
 }
 
@@ -619,7 +733,7 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for Ch
         Ok(format!(
             "{}payments/{}/voids",
             self.base_url(connectors),
-            &req.request.connector_transaction_id
+            req.request.connector_transaction_id
         ))
     }
 
@@ -974,8 +1088,7 @@ impl ConnectorIntegration<Upload, UploadFileRequestData, UploadFileResponse> for
         req: &UploadFileRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let connector_req = transformers::construct_file_upload_request(req.clone())?;
-        Ok(RequestContent::FormData(connector_req))
+        transformers::construct_file_upload_request(req.clone())
     }
 
     fn build_request(
@@ -1206,49 +1319,45 @@ impl webhooks::IncomingWebhook for Checkout {
             .body
             .parse_struct("CheckoutWebhookBody")
             .change_context(errors::ConnectorError::WebhookReferenceIdNotFound)?;
-        let ref_id: api_models::webhooks::ObjectReferenceId =
-            if checkout::is_chargeback_event(&details.transaction_type) {
-                let reference = match details.data.reference {
-                    Some(reference) => {
-                        api_models::payments::PaymentIdType::PaymentAttemptId(reference)
-                    }
-                    None => api_models::payments::PaymentIdType::ConnectorTransactionId(
-                        details
-                            .data
-                            .payment_id
-                            .ok_or(errors::ConnectorError::WebhookReferenceIdNotFound)?,
-                    ),
-                };
-                api_models::webhooks::ObjectReferenceId::PaymentId(reference)
-            } else if checkout::is_refund_event(&details.transaction_type) {
-                let refund_reference = match details.data.reference {
-                    Some(reference) => api_models::webhooks::RefundIdType::RefundId(reference),
-                    None => api_models::webhooks::RefundIdType::ConnectorRefundId(
-                        details
-                            .data
-                            .action_id
-                            .ok_or(errors::ConnectorError::WebhookReferenceIdNotFound)?,
-                    ),
-                };
-                api_models::webhooks::ObjectReferenceId::RefundId(refund_reference)
-            } else {
-                let reference_id = match details.data.reference {
-                    Some(reference) => {
-                        api_models::payments::PaymentIdType::PaymentAttemptId(reference)
-                    }
-                    None => {
-                        api_models::payments::PaymentIdType::ConnectorTransactionId(details.data.id)
-                    }
-                };
-                api_models::webhooks::ObjectReferenceId::PaymentId(reference_id)
+        let ref_id = if checkout::is_chargeback_event(&details.transaction_type) {
+            api_models::webhooks::ObjectReferenceId::PaymentId(
+                api_models::payments::PaymentIdType::ConnectorTransactionId(
+                    details
+                        .data
+                        .payment_id
+                        .ok_or(errors::ConnectorError::WebhookReferenceIdNotFound)?,
+                ),
+            )
+        } else if checkout::is_refund_event(&details.transaction_type) {
+            let refund_reference = match details.data.reference {
+                Some(reference) => api_models::webhooks::RefundIdType::RefundId(reference),
+                None => api_models::webhooks::RefundIdType::ConnectorRefundId(
+                    details
+                        .data
+                        .action_id
+                        .ok_or(errors::ConnectorError::WebhookReferenceIdNotFound)?,
+                ),
             };
+            api_models::webhooks::ObjectReferenceId::RefundId(refund_reference)
+        } else {
+            api_models::webhooks::ObjectReferenceId::PaymentId(
+                api_models::payments::PaymentIdType::ConnectorTransactionId(
+                    details.data.payment_id.unwrap_or(details.data.id),
+                ),
+            )
+        };
         Ok(ref_id)
     }
 
     fn get_webhook_event_type(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
+        if request.body.is_empty() {
+            return Ok(api_models::webhooks::IncomingWebhookEvent::EndpointVerification);
+        }
+
         let details: checkout::CheckoutWebhookEventTypeBody = request
             .body
             .parse_struct("CheckoutWebhookBody")
@@ -1262,7 +1371,8 @@ impl webhooks::IncomingWebhook for Checkout {
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let event_type_data: checkout::CheckoutWebhookEventTypeBody = request
             .body
             .parse_struct("CheckoutWebhookBody")
@@ -1284,17 +1394,25 @@ impl webhooks::IncomingWebhook for Checkout {
     fn get_dispute_details(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<DisputePayload, errors::ConnectorError> {
         let dispute_details: checkout::CheckoutDisputeWebhookBody = request
             .body
             .parse_struct("CheckoutWebhookBody")
             .change_context(errors::ConnectorError::WebhookBodyDecodingFailed)?;
+
+        let amount = utils::convert_amount(
+            self.amount_converter_webhooks,
+            dispute_details.data.amount,
+            dispute_details.data.currency,
+        )?;
+
         Ok(DisputePayload {
-            amount: dispute_details.data.amount.to_string(),
+            amount,
             currency: dispute_details.data.currency,
-            dispute_stage: api_models::enums::DisputeStage::from(
+            dispute_stage: api_models::enums::DisputeStage::try_from(
                 dispute_details.transaction_type.clone(),
-            ),
+            )?,
             connector_dispute_id: dispute_details.data.id,
             connector_reason: None,
             connector_reason_code: dispute_details.data.reason_code,
@@ -1448,4 +1566,153 @@ impl utils::ConnectorErrorTypeMapping for Checkout {
     }
 }
 
-impl ConnectorSpecifications for Checkout {}
+static CHECKOUT_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(|| {
+        let supported_capture_methods = vec![
+            enums::CaptureMethod::Automatic,
+            enums::CaptureMethod::Manual,
+            enums::CaptureMethod::SequentialAutomatic,
+            enums::CaptureMethod::ManualMultiple,
+        ];
+
+        let supported_card_network = vec![
+            common_enums::CardNetwork::AmericanExpress,
+            common_enums::CardNetwork::CartesBancaires,
+            common_enums::CardNetwork::DinersClub,
+            common_enums::CardNetwork::Discover,
+            common_enums::CardNetwork::JCB,
+            common_enums::CardNetwork::Mastercard,
+            common_enums::CardNetwork::Visa,
+            common_enums::CardNetwork::UnionPay,
+        ];
+
+        let mut checkout_supported_payment_methods = SupportedPaymentMethods::new();
+
+        checkout_supported_payment_methods.add(
+            enums::PaymentMethod::Card,
+            enums::PaymentMethodType::Credit,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::Supported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: Some(
+                    api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                        api_models::feature_matrix::CardSpecificFeatures {
+                            three_ds: common_enums::FeatureStatus::Supported,
+                            no_three_ds: common_enums::FeatureStatus::Supported,
+                            supported_card_networks: supported_card_network.clone(),
+                        }
+                    }),
+                ),
+            },
+        );
+
+        checkout_supported_payment_methods.add(
+            enums::PaymentMethod::Card,
+            enums::PaymentMethodType::Debit,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::Supported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: Some(
+                    api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                        api_models::feature_matrix::CardSpecificFeatures {
+                            three_ds: common_enums::FeatureStatus::Supported,
+                            no_three_ds: common_enums::FeatureStatus::Supported,
+                            supported_card_networks: supported_card_network.clone(),
+                        }
+                    }),
+                ),
+            },
+        );
+
+        checkout_supported_payment_methods.add(
+            enums::PaymentMethod::Wallet,
+            enums::PaymentMethodType::GooglePay,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: None,
+            },
+        );
+
+        checkout_supported_payment_methods.add(
+            enums::PaymentMethod::Wallet,
+            enums::PaymentMethodType::ApplePay,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: None,
+            },
+        );
+
+        checkout_supported_payment_methods.add(
+            enums::PaymentMethod::NetworkToken,
+            enums::PaymentMethodType::NetworkToken,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods: supported_capture_methods.clone(),
+                specific_features: None,
+            },
+        );
+
+        checkout_supported_payment_methods
+    });
+
+static CHECKOUT_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+        display_name: "Checkout",
+        description:
+            "Checkout.com is a British multinational financial technology company that processes payments for other companies.",
+        connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+        integration_status: enums::ConnectorIntegrationStatus::Live,
+    };
+
+static CHECKOUT_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 3] = [
+    enums::EventClass::Payments,
+    enums::EventClass::Refunds,
+    enums::EventClass::Disputes,
+];
+
+const AMEX_PAYMENT_REFERENCE_LENGTH: usize = 30;
+
+impl ConnectorSpecifications for Checkout {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&CHECKOUT_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*CHECKOUT_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&CHECKOUT_SUPPORTED_WEBHOOK_FLOWS)
+    }
+
+    #[cfg(feature = "v1")]
+    fn generate_connector_request_reference_id(
+        &self,
+        _payment_intent: &hyperswitch_domain_models::payments::PaymentIntent,
+        payment_attempt: &hyperswitch_domain_models::payments::payment_attempt::PaymentAttempt,
+        _is_config_enabled_to_send_payment_id_as_connector_request_id: bool,
+    ) -> String {
+        let is_amex = payment_attempt
+            .get_payment_method_data()
+            .and_then(|data| data.get_additional_card_info())
+            .is_some_and(|card_info| {
+                card_info.card_isin.as_deref().is_some_and(|card_isin| {
+                    utils::CardIssuer::from_isin(card_isin)
+                        == Some(utils::CardIssuer::AmericanExpress)
+                })
+            });
+
+        let attempt_id = payment_attempt.attempt_id.clone();
+        if is_amex & (attempt_id.clone().len() > AMEX_PAYMENT_REFERENCE_LENGTH) {
+            common_utils::generate_nanoid_with_default_alphabet(AMEX_PAYMENT_REFERENCE_LENGTH)
+        } else {
+            payment_attempt.attempt_id.clone()
+        }
+    }
+}

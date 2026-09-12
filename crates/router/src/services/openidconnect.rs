@@ -1,15 +1,16 @@
+use common_utils::errors::ErrorSwitch;
 use error_stack::ResultExt;
-use masking::{ExposeInterface, Secret};
+use external_services::http_client::client;
+use hyperswitch_masking::{ExposeInterface, Secret};
 use oidc::TokenResponse;
 use openidconnect::{self as oidc, core as oidc_core};
-use redis_interface::RedisConnectionPool;
+use redis_interface::RedisConnectionWithContext;
 use storage_impl::errors::ApiClientError;
 
 use crate::{
     consts,
     core::errors::{UserErrors, UserResult},
     routes::SessionState,
-    services::api::client,
     types::domain::user::UserEmail,
 };
 
@@ -34,7 +35,7 @@ pub async fn get_authorization_url(
 
     // Save csrf & nonce as key value respectively
     let key = get_oidc_redis_key(csrf_token.secret());
-    get_redis_connection(&state)?
+    get_redis_connection_for_global_tenant(&state)?
         .set_key_with_expiry(&key.into(), nonce.secret(), consts::user::REDIS_SSO_TTL)
         .await
         .change_context(UserErrors::InternalServerError)
@@ -75,7 +76,14 @@ pub async fn get_user_email_from_oidc_provider(
         .exchange_code(oidc::AuthorizationCode::new(authorization_code.expose()))
         .request_async(|req| get_oidc_reqwest_client(state, req))
         .await
-        .change_context(UserErrors::InternalServerError)
+        .map_err(|e| match e {
+            oidc::RequestTokenError::ServerResponse(resp)
+                if resp.error() == &oidc_core::CoreErrorResponseType::InvalidGrant =>
+            {
+                UserErrors::SSOFailed
+            }
+            _ => UserErrors::InternalServerError,
+        })
         .attach_printable("Failed to exchange code and fetch oidc token")?;
 
     // Fetch id token from response
@@ -138,7 +146,7 @@ async fn get_nonce_from_redis(
     state: &SessionState,
     redirect_state: &Secret<String>,
 ) -> UserResult<oidc::Nonce> {
-    let redis_connection = get_redis_connection(state)?;
+    let redis_connection = get_redis_connection_for_global_tenant(state)?;
     let redirect_state = redirect_state.clone().expose();
     let key = get_oidc_redis_key(&redirect_state);
     redis_connection
@@ -155,8 +163,8 @@ async fn get_oidc_reqwest_client(
     state: &SessionState,
     request: oidc::HttpRequest,
 ) -> Result<oidc::HttpResponse, ApiClientError> {
-    let client = client::create_client(&state.conf.proxy, None, None)
-        .map_err(|e| e.current_context().to_owned())?;
+    let client = client::create_client(&state.conf.proxy, None, None, None)
+        .map_err(|e| e.current_context().switch())?;
 
     let mut request_builder = client
         .request(request.method, request.url)
@@ -188,9 +196,11 @@ fn get_oidc_redis_key(csrf: &str) -> String {
     format!("{}OIDC_{}", consts::user::REDIS_SSO_PREFIX, csrf)
 }
 
-fn get_redis_connection(state: &SessionState) -> UserResult<std::sync::Arc<RedisConnectionPool>> {
+fn get_redis_connection_for_global_tenant(
+    state: &SessionState,
+) -> UserResult<RedisConnectionWithContext> {
     state
-        .store
+        .global_store
         .get_redis_conn()
         .change_context(UserErrors::InternalServerError)
         .attach_printable("Failed to get redis connection")

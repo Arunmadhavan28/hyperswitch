@@ -15,8 +15,12 @@ pub use super::fraud_check_v2::{
     FraudCheckCheckoutV2, FraudCheckFulfillmentV2, FraudCheckRecordReturnV2, FraudCheckSaleV2,
     FraudCheckTransactionV2, FraudCheckV2,
 };
-use super::{ConnectorData, SessionConnectorData};
-use crate::{connector, core::errors, services::connector_integration_interface::ConnectorEnum};
+use super::{ConnectorData, SessionConnectorDatas};
+use crate::{
+    connector,
+    core::{errors, payments::ActionType},
+    services::connector_integration_interface::ConnectorEnum,
+};
 
 #[derive(Clone)]
 pub struct FraudCheckConnectorData {
@@ -24,9 +28,17 @@ pub struct FraudCheckConnectorData {
     pub connector_name: enums::FrmConnectors,
 }
 pub enum ConnectorCallType {
-    PreDetermined(ConnectorData),
-    Retryable(Vec<ConnectorData>),
-    SessionMultiple(Vec<SessionConnectorData>),
+    PreDetermined(ConnectorRoutingData),
+    Retryable(Vec<ConnectorRoutingData>),
+    SessionMultiple(SessionConnectorDatas),
+}
+
+#[derive(Clone)]
+pub struct ConnectorRoutingData {
+    pub connector_data: ConnectorData,
+    pub network: Option<common_enums::CardNetwork>,
+    // action_type is used for mandates currently
+    pub action_type: Option<ActionType>,
 }
 
 impl FraudCheckConnectorData {
@@ -48,11 +60,17 @@ impl FraudCheckConnectorData {
     ) -> CustomResult<ConnectorEnum, errors::ApiErrorResponse> {
         match connector_name {
             enums::FrmConnectors::Signifyd => {
-                Ok(ConnectorEnum::Old(Box::new(&connector::Signifyd)))
+                Ok(ConnectorEnum::Old(Box::new(connector::Signifyd::new())))
             }
             enums::FrmConnectors::Riskified => {
                 Ok(ConnectorEnum::Old(Box::new(connector::Riskified::new())))
             }
+            enums::FrmConnectors::Cybersourcedecisionmanager => Ok(ConnectorEnum::Old(Box::new(
+                connector::Cybersourcedecisionmanager::new(),
+            ))),
+            enums::FrmConnectors::SanlamPayshield => Ok(ConnectorEnum::Old(Box::new(
+                connector::SanlamPayshield::new(),
+            ))),
         }
     }
 }

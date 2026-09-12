@@ -1,24 +1,8 @@
 /// Payments - Create
 ///
-/// **Creates a payment object when amount and currency are passed.**
+/// Creates a payment resource, which represents a customer's intent to pay.
+/// This endpoint is the starting point for various payment flows:
 ///
-/// This API is also used to create a mandate by passing the `mandate_object`.
-///
-/// Depending on the user journey you wish to achieve, you may opt to complete all the steps in a single request **by attaching a payment method, setting `confirm=true` and `capture_method = automatic`** in the *Payments/Create API* request.
-///
-/// Otherwise, To completely process a payment you will have to **create a payment, attach a payment method, confirm and capture funds**. For that you could use the following sequence of API requests -
-///
-/// 1. Payments - Create
-///
-/// 2. Payments - Update
-///
-/// 3. Payments - Confirm
-///
-/// 4. Payments - Capture.
-///
-/// You will require the 'API - Key' from the Hyperswitch dashboard to make the first call, and use the 'client secret' returned in this API along with your 'publishable key' to make subsequent API calls from your client.
-///
-/// This page lists the various combinations in which the Payments - Create API can be used and the details about the various fields in the requests and responses.
 #[utoipa::path(
     post,
     path = "/payments",
@@ -26,12 +10,12 @@
         content = PaymentsCreateRequest,
         examples(
             (
-                "Create a payment with minimal fields" = (
+                "01. Create a payment with minimal fields" = (
                     value = json!({"amount": 6540,"currency": "USD"})
                 )
             ),
             (
-                "Create a payment with customer details and metadata" = (
+                "02. Create a payment with customer details and metadata" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -53,7 +37,7 @@
                 )
             ),
             (
-                "Create a 3DS payment" = (
+                "03. Create a 3DS payment" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -62,7 +46,7 @@
                 )
             ),
             (
-                "Create a manual capture payment" = (
+                "04. Create a manual capture payment (basic)" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -71,7 +55,7 @@
                 )
             ),
             (
-                "Create a setup mandate payment" = (
+                "05. Create a setup mandate payment" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -117,7 +101,7 @@
                 )
             ),
             (
-                "Create a recurring payment with mandate_id" = (
+                "06. Create a recurring payment with mandate_id" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -130,7 +114,7 @@
                 )
             ),
             (
-                "Create a payment and save the card" = (
+                "07. Create a payment and save the card" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -160,7 +144,7 @@
                 )
             ),
             (
-                "Create a payment using an already saved card's token" = (
+                "08. Create a payment using an already saved card's token" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -173,7 +157,7 @@
                 )
             ),
             (
-                "Create a manual capture payment" = (
+                "09. Create a payment with billing details" = (
                     value = json!({
                     "amount": 6540,
                     "currency": "USD",
@@ -199,12 +183,463 @@
                     }
                 })
             )
-            )
+            ),
+            (
+              "10. Create a Stripe Split Payments CIT call" = (
+                value = json!({
+                  "amount": 200,
+                  "currency": "USD",
+                  "profile_id": "pro_abcdefghijklmnop",
+                  "confirm": true,
+                  "capture_method": "automatic",
+                  "amount_to_capture": 200,
+                  "customer_id": "StripeCustomer123",
+                  "setup_future_usage": "off_session",
+                  "customer_acceptance": {
+                      "acceptance_type": "offline",
+                      "accepted_at": "1963-05-03T04:07:52.723Z",
+                      "online": {
+                          "ip_address": "125.0.0.1",
+                          "user_agent": "amet irure esse"
+                      }
+                  },
+                  "authentication_type": "no_three_ds",
+                  "return_url": "https://hyperswitch.io",
+                  "name": "John Doe",
+                  "phone": "999999999",
+                  "phone_country_code": "+65",
+                  "description": "Its my first payment request",
+                  "payment_method": "card",
+                  "payment_method_type": "debit",
+                  "payment_method_data": {
+                      "card": {
+                          "card_number": "4242424242424242",
+                          "card_exp_month": "09",
+                          "card_exp_year": "25",
+                          "card_holder_name": "joseph Doe",
+                          "card_cvc": "123"
+                      }
+                  },
+                  "billing": {
+                      "address": {
+                          "line1": "1467",
+                          "line2": "Harrison Street",
+                          "line3": "Harrison Street",
+                          "city": "San Fransico",
+                          "state": "California",
+                          "zip": "94122",
+                          "country": "US",
+                          "first_name": "joseph",
+                          "last_name": "Doe"
+                      },
+                      "phone": {
+                          "number": "9999999999",
+                          "country_code": "+91"
+                      }
+                  },
+                  "split_payments": {
+                      "stripe_split_payment": {
+                          "charge_type": "direct",
+                          "application_fees": 100,
+                          "transfer_account_id": "acct_123456789"
+                      }
+                  }
+              })
+              )
+            ),
+            (
+              "11. Create a Stripe Split Payments MIT call" = (
+                value = json!({
+                  "amount": 200,
+                  "currency": "USD",
+                  "profile_id": "pro_abcdefghijklmnop",
+                  "customer_id": "StripeCustomer123",
+                  "description": "Subsequent Mandate Test Payment (MIT from New CIT Demo)",
+                  "confirm": true,
+                  "off_session": true,
+                  "recurring_details": {
+                      "type": "payment_method_id",
+                      "data": "pm_123456789"
+                  },
+                  "split_payments": {
+                      "stripe_split_payment": {
+                          "charge_type": "direct",
+                          "application_fees": 11,
+                          "transfer_account_id": "acct_123456789"
+                      }
+                  }
+              })
+              )
+            ),
         ),
     ),
     responses(
-        (status = 200, description = "Payment created", body = PaymentsCreateResponseOpenApi),
-        (status = 400, description = "Missing Mandatory fields")
+        (status = 200, description = "Payment created", body = PaymentsCreateResponseOpenApi,
+            examples(
+                ("01. Response for minimal payment creation (requires payment method)" = (
+                    value = json!({
+                        "payment_id": "pay_syxxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "client_secret": "pay_syxxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:00:00Z",
+                        "amount_capturable": 6540,
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "expires_on": "2023-10-26T10:15:00Z"
+                    })
+                )),
+                ("02. Response for payment with customer details (requires payment method)" = (
+                    value = json!({
+                        "payment_id": "pay_custmeta_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "customer_id": "cus_abcdefgh",
+                        "customer": {
+                            "id": "cus_abcdefgh",
+                            "name": "John Dough",
+                            "email": "john@example.com",
+                            "phone": "9123456789"
+                        },
+                        "description": "Its my first payment request",
+                        "statement_descriptor_name": "joseph",
+                        "statement_descriptor_suffix": "JS",
+                        "metadata": {
+                            "udf1": "some-value",
+                            "udf2": "some-value"
+                        },
+                        "client_secret": "pay_custmeta_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:05:00Z",
+                        "ephemeral_key": {
+                            "customer_id": "cus_abcdefgh",
+                            "secret": "epk_ephemeralxxxxxxxxxxxx"
+                        },
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "expires_on": "2023-10-26T10:20:00Z"
+                    })
+                )),
+                ("03. Response for 3DS payment creation (requires payment method)" = (
+                    value = json!({
+                        "payment_id": "pay_3ds_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "authentication_type": "three_ds",
+                        "client_secret": "pay_3ds_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:10:00Z",
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "expires_on": "2023-10-26T10:25:00Z"
+                    })
+                )),
+                ("04. Response for basic manual capture payment (requires payment method)" = (
+                    value = json!({
+                        "payment_id": "pay_manualcap_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "capture_method": "manual",
+                        "client_secret": "pay_manualcap_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:15:00Z",
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "expires_on": "2023-10-26T10:30:00Z"
+                    })
+                )),
+                ("05. Response for successful setup mandate payment" = (
+                    value = json!({
+                        "payment_id": "pay_mandatesetup_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "succeeded",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "amount_capturable": 0,
+                        "amount_received": 6540,
+                        "connector": "fauxpay",
+                        "customer_id": "StripeCustomer123",
+                        "mandate_id": "man_xxxxxxxxxxxx",
+                        "mandate_data": {
+                            "customer_acceptance": {
+                                "acceptance_type": "online",
+                                "accepted_at": "1963-05-03T04:07:52.723Z",
+                                "online": { "ip_address": "127.0.0.1", "user_agent": "amet irure esse" }
+                            },
+                            "mandate_type": { "single_use": { "amount": 6540, "currency": "USD" } }
+                        },
+                        "setup_future_usage": "on_session",
+                        "payment_method": "card",
+                        "payment_method_data": {
+                            "card": { "last4": "4242", "card_exp_month": "10", "card_exp_year": "25", "card_holder_name": "joseph Doe" }
+                        },
+                        "authentication_type": "no_three_ds",
+                        "client_secret": "pay_mandatesetup_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:20:00Z",
+                        "ephemeral_key": { "customer_id": "StripeCustomer123", "secret": "epk_ephemeralxxxxxxxxxxxx" },
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "merchant_connector_id": "mca_mcaconnectorxxxx",
+                        "connector_transaction_id": "txn_connectortransidxxxx"
+                    })
+                )),
+                ("06. Response for successful recurring payment with mandate_id" = (
+                    value = json!({
+                        "payment_id": "pay_recurring_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "succeeded",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "amount_capturable": 0,
+                        "amount_received": 6540,
+                        "connector": "fauxpay",
+                        "customer_id": "StripeCustomer",
+                        "mandate_id": "{{mandate_id}}",
+                        "off_session": true,
+                        "payment_method": "card",
+                        "authentication_type": "no_three_ds",
+                        "client_secret": "pay_recurring_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:22:00Z",
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "merchant_connector_id": "mca_mcaconnectorxxxx",
+                        "connector_transaction_id": "txn_connectortransidxxxx"
+                    })
+                )),
+                ("07. Response for successful payment with card saved" = (
+                    value = json!({
+                        "payment_id": "pay_savecard_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "succeeded",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "amount_capturable": 0,
+                        "amount_received": 6540,
+                        "connector": "fauxpay",
+                        "customer_id": "StripeCustomer123",
+                        "setup_future_usage": "on_session",
+                        "payment_method": "card",
+                        "payment_method_data": {
+                            "card": { "last4": "4242", "card_exp_month": "10", "card_exp_year": "25", "card_holder_name": "joseph Doe" }
+                        },
+                        "authentication_type": "no_three_ds",
+                        "client_secret": "pay_savecard_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:25:00Z",
+                        "ephemeral_key": { "customer_id": "StripeCustomer123", "secret": "epk_ephemeralxxxxxxxxxxxx" },
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "merchant_connector_id": "mca_mcaconnectorxxxx",
+                        "connector_transaction_id": "txn_connectortransidxxxx",
+                        "payment_token": null // Assuming payment_token is for subsequent use, not in this response.
+                    })
+                )),
+                ("08. Response for successful payment using saved card token" = (
+                    value = json!({
+                        "payment_id": "pay_token_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "succeeded",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "amount_capturable": 0,
+                        "amount_received": 6540,
+                        "connector": "fauxpay",
+                        "payment_method": "card",
+                        "payment_token": "{{payment_token}}",
+                        "client_secret": "pay_token_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:27:00Z",
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "merchant_connector_id": "mca_mcaconnectorxxxx",
+                        "connector_transaction_id": "txn_connectortransidxxxx"
+                    })
+                )),
+                ("09. Response for payment with billing details (requires payment method)" = (
+                    value = json!({
+                        "payment_id": "pay_manualbill_xxxxxxxxxxxx",
+                        "merchant_id": "merchant_myyyyyyyyyyyy",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "customer_id": "cus_abcdefgh",
+                        "customer": {
+                            "id": "cus_abcdefgh",
+                            "name": "John Dough",
+                            "email": "john@example.com",
+                            "phone": "9123456789"
+                        },
+                        "billing": {
+                            "address": {
+                                "line1": "1467", "line2": "Harrison Street", "city": "San Fransico",
+                                "state": "California", "zip": "94122", "country": "US",
+                                "first_name": "joseph", "last_name": "Doe"
+                            },
+                            "phone": { "number": "9123456789", "country_code": "+91" }
+                        },
+                        "client_secret": "pay_manualbill_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                        "created": "2023-10-26T10:30:00Z",
+                        "ephemeral_key": { "customer_id": "cus_abcdefgh", "secret": "epk_ephemeralxxxxxxxxxxxx" },
+                        "profile_id": "pro_pzzzzzzzzzzz",
+                        "attempt_count": 1,
+                        "expires_on": "2023-10-26T10:45:00Z"
+                    })
+                )),
+
+                ("10. Response for the CIT call for Stripe Split Payments" = (
+                  value = json!({
+                      "payment_id": "pay_manualbill_xxxxxxxxxxxx",
+                      "merchant_id": "merchant_myyyyyyyyyyyy",
+                      "status": "succeeded",
+                      "amount": 200,
+                      "currency": "USD",
+                      "customer_id": "cus_abcdefgh",
+                      "payment_method_id": "pm_123456789",
+                      "connector_mandate_id": "pm_abcdefgh",
+                      "customer": {
+                          "id": "cus_abcdefgh",
+                          "name": "John Dough",
+                          "email": "john@example.com",
+                          "phone": "9123456789"
+                      },
+                      "billing": {
+                          "address": {
+                              "line1": "1467", "line2": "Harrison Street", "city": "San Fransico",
+                              "state": "California", "zip": "94122", "country": "US",
+                              "first_name": "joseph", "last_name": "Doe"
+                          },
+                          "phone": { "number": "9123456789", "country_code": "+91" }
+                      },
+                      "client_secret": "pay_manualbill_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                      "created": "2023-10-26T10:30:00Z",
+                      "ephemeral_key": { "customer_id": "cus_abcdefgh", "secret": "epk_ephemeralxxxxxxxxxxxx" },
+                      "profile_id": "pro_pzzzzzzzzzzz",
+                      "attempt_count": 1,
+                      "expires_on": "2023-10-26T10:45:00Z"
+                  })
+              )),
+
+              ("11. Response for the MIT call for Stripe Split Payments" = (
+                value = json!({
+                    "payment_id": "pay_manualbill_xxxxxxxxxxxx",
+                    "merchant_id": "merchant_myyyyyyyyyyyy",
+                    "status": "succeeded",
+                    "amount": 200,
+                    "currency": "USD",
+                    "customer_id": "cus_abcdefgh",
+                    "payment_method_id": "pm_123456789",
+                    "connector_mandate_id": "pm_abcdefgh",
+                    "customer": {
+                        "id": "cus_abcdefgh",
+                        "name": "John Dough",
+                        "email": "john@example.com",
+                        "phone": "9123456789"
+                    },
+                    "billing": {
+                        "address": {
+                            "line1": "1467", "line2": "Harrison Street", "city": "San Fransico",
+                            "state": "California", "zip": "94122", "country": "US",
+                            "first_name": "joseph", "last_name": "Doe"
+                        },
+                        "phone": { "number": "9123456789", "country_code": "+91" }
+                    },
+                    "client_secret": "pay_manualbill_xxxxxxxxxxxx_secret_szzzzzzzzzzz",
+                    "created": "2023-10-26T10:30:00Z",
+                    "ephemeral_key": { "customer_id": "cus_abcdefgh", "secret": "epk_ephemeralxxxxxxxxxxxx" },
+                    "profile_id": "pro_pzzzzzzzzzzz",
+                    "attempt_count": 1,
+                    "expires_on": "2023-10-26T10:45:00Z"
+                })
+            )),
+            ("12. Server integration response" = (
+                value = json!({
+                    "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                    "merchant_id": "merchant_1668273825",
+                    "status": "requires_payment_method",
+                    "amount": 6540,
+                    "currency": "USD",
+                    "customer_id": "cus_abcdefgh",
+                    "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                    "sdk_authorization": "cHJvZmlsZV9pZD1wcm9mXzEyMyxwdWJsaXNoYWJsZV9rZXk9cGtfbGl2ZV8xMjM=",
+                    "profile_id": "pro_abcdefghijklmnop",
+                    "attempt_count": 1,
+                    "payment_method_list": {
+                        "payment_methods_enabled": [
+                            {
+                                "payment_method": "card",
+                                "payment_method_type": "credit",
+                                "card_networks": ["Visa", "Mastercard"],
+                                "customer_acceptance_support": "supported"
+                            }
+                        ],
+                        "customer_payment_methods": [],
+                        "sdk_next_action": { "next_action": "confirm" },
+                        "intent_data": {
+                            "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                            "status": "requires_payment_method",
+                            "amount": 6540,
+                            "currency": "USD",
+                            "customer_id": "cus_abcdefgh",
+                            "profile_id": "pro_abcdefghijklmnop",
+                            "attempt_count": 1
+                        }
+                    },
+                    "session_tokens": {
+                        "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                        "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                        "session_token": [],
+                        "vault_details": {
+                            "vault_type": "hyperswitch",
+                            "vault_data": {
+                                "sdk_authorization": "cHJvZmlsZV9pZD1wcm9mXzEyMyxwdWJsaXNoYWJsZV9rZXk9cGtfbGl2ZV8xMjM="
+                            }
+                        }
+                    }
+                })
+            )),
+            ("13. Server integration, one section failed" = (
+                value = json!({
+                    "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                    "merchant_id": "merchant_1668273825",
+                    "status": "requires_payment_method",
+                    "amount": 6540,
+                    "currency": "USD",
+                    "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                    "profile_id": "pro_abcdefghijklmnop",
+                    "attempt_count": 1,
+                    "payment_method_list": {
+                        "payment_methods_enabled": [],
+                        "customer_payment_methods": [],
+                        "sdk_next_action": { "next_action": "confirm" },
+                        "intent_data": {
+                            "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                            "status": "requires_payment_method",
+                            "amount": 6540,
+                            "currency": "USD",
+                            "attempt_count": 1
+                        }
+                    },
+                    "session_tokens": {
+                        "error": {
+                            "type": "api",
+                            "message": "Something went wrong",
+                            "code": "HE_00"
+                        }
+                    }
+                })
+            ))
+            )
+        ),
+        (status = 400, description = "Missing Mandatory fields", body = GenericErrorResponseOpenApi),
+    ),
+    params(
+        ("X-Integration-Type" = Option<String>, Header, description = "Selects the response shape. `server` returns the payment together with \
+            `payment_method_list` and `session_tokens`, so a server-to-server integration can render \
+            its checkout from one call; it is honoured only with merchant API key authentication. \
+            `client`, or no header, returns the payment response unchanged.", example = "server")
     ),
     tag = "Payments",
     operation_id = "Create a Payment",
@@ -219,9 +654,12 @@ pub fn payments_create() {}
     get,
     path = "/payments/{payment_id}",
     params(
-        ("payment_id" = String, Path, description = "The identifier for payment")
+        ("payment_id" = String, Path, description = "The identifier for payment"),
+        ("force_sync" = Option<bool>, Query, description = "Decider to enable or disable the connector call for retrieve request"),
+        ("client_secret" = Option<String>, Query, description = "This is a token which expires after 15 minutes, used from the client to authenticate and create sessions from the SDK"),
+        ("expand_attempts" = Option<bool>, Query, description = "If enabled provides list of attempts linked to payment intent"),
+        ("expand_captures" = Option<bool>, Query, description = "If enabled provides list of captures linked to latest attempt"),
     ),
-    request_body=PaymentRetrieveBody,
     responses(
         (status = 200, description = "Gets the payment with final status", body = PaymentsResponse),
         (status = 404, description = "No payment found")
@@ -239,7 +677,11 @@ pub fn payments_retrieve() {}
     post,
     path = "/payments/{payment_id}",
     params(
-        ("payment_id" = String, Path, description = "The identifier for payment")
+        ("payment_id" = String, Path, description = "The identifier for payment"),
+        ("X-Integration-Type" = Option<String>, Header, description = "Selects the response shape. `server` returns the payment together with \
+            `payment_method_list` and `session_tokens`, so a server-to-server integration can render \
+            its checkout from one call; it is honoured only with merchant API key authentication. \
+            `client`, or no header, returns the payment response unchanged.", example = "server")
     ),
    request_body(
      content = PaymentsUpdateRequest,
@@ -280,8 +722,88 @@ pub fn payments_retrieve() {}
      )
     ),
     responses(
-        (status = 200, description = "Payment updated", body = PaymentsCreateResponseOpenApi),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 200, description = "Payment updated", body = PaymentsCreateResponseOpenApi,
+            examples(
+                ("Server integration response" = (
+                    value = json!({
+                        "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                        "merchant_id": "merchant_1668273825",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "customer_id": "cus_abcdefgh",
+                        "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                        "sdk_authorization": "cHJvZmlsZV9pZD1wcm9mXzEyMyxwdWJsaXNoYWJsZV9rZXk9cGtfbGl2ZV8xMjM=",
+                        "profile_id": "pro_abcdefghijklmnop",
+                        "attempt_count": 1,
+                        "payment_method_list": {
+                            "payment_methods_enabled": [
+                                {
+                                    "payment_method": "card",
+                                    "payment_method_type": "credit",
+                                    "card_networks": ["Visa", "Mastercard"],
+                                    "customer_acceptance_support": "supported"
+                                }
+                            ],
+                            "customer_payment_methods": [],
+                            "sdk_next_action": { "next_action": "confirm" },
+                            "intent_data": {
+                                "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                                "status": "requires_payment_method",
+                                "amount": 6540,
+                                "currency": "USD",
+                                "customer_id": "cus_abcdefgh",
+                                "profile_id": "pro_abcdefghijklmnop",
+                                "attempt_count": 1
+                            }
+                        },
+                        "session_tokens": {
+                            "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                            "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                            "session_token": [],
+                            "vault_details": {
+                                "vault_type": "hyperswitch",
+                                "vault_data": {
+                                    "sdk_authorization": "cHJvZmlsZV9pZD1wcm9mXzEyMyxwdWJsaXNoYWJsZV9rZXk9cGtfbGl2ZV8xMjM="
+                                }
+                            }
+                        }
+                    })
+                )),
+                ("Server integration, one section failed" = (
+                    value = json!({
+                        "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                        "merchant_id": "merchant_1668273825",
+                        "status": "requires_payment_method",
+                        "amount": 6540,
+                        "currency": "USD",
+                        "client_secret": "pay_mbabizu24mvu3mela5njyhpit4_secret_el9ksDkiB8hi6j9N78yo",
+                        "profile_id": "pro_abcdefghijklmnop",
+                        "attempt_count": 1,
+                        "payment_method_list": {
+                            "payment_methods_enabled": [],
+                            "customer_payment_methods": [],
+                            "sdk_next_action": { "next_action": "confirm" },
+                            "intent_data": {
+                                "payment_id": "pay_mbabizu24mvu3mela5njyhpit4",
+                                "status": "requires_payment_method",
+                                "amount": 6540,
+                                "currency": "USD",
+                                "attempt_count": 1
+                            }
+                        },
+                        "session_tokens": {
+                            "error": {
+                                "type": "api",
+                                "message": "Something went wrong",
+                                "code": "HE_00"
+                            }
+                        }
+                    })
+                ))
+            )
+        ),
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Update a Payment",
@@ -291,15 +813,12 @@ pub fn payments_update() {}
 
 /// Payments - Confirm
 ///
-/// **Use this API to confirm the payment and forward the payment to the payment processor.**
+/// Confirms a payment intent that was previously created with `confirm: false`. This action attempts to authorize the payment with the payment processor.
 ///
-/// Alternatively you can confirm the payment within the *Payments/Create* API by setting `confirm=true`. After confirmation, the payment could either:
-///
-/// 1. fail with `failed` status or
-///
-/// 2. transition to a `requires_customer_action` status with a `next_action` block or
-///
-/// 3. succeed with either `succeeded` in case of automatic capture or `requires_capture` in case of manual capture
+/// Expected status transitions after confirmation:
+/// - `succeeded`: If authorization is successful and `capture_method` is `automatic`.
+/// - `requires_capture`: If authorization is successful and `capture_method` is `manual`.
+/// - `failed`: If authorization fails.
 #[utoipa::path(
     post,
     path = "/payments/{payment_id}/confirm",
@@ -339,7 +858,7 @@ pub fn payments_update() {}
     ),
     responses(
         (status = 200, description = "Payment confirmed", body = PaymentsCreateResponseOpenApi),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Confirm a Payment",
@@ -349,7 +868,13 @@ pub fn payments_confirm() {}
 
 /// Payments - Capture
 ///
-/// To capture the funds for an uncaptured payment
+/// Captures the funds for a previously authorized payment intent where `capture_method` was set to `manual` and the payment is in a `requires_capture` state.
+///
+/// Upon successful capture, the payment status usually transitions to `succeeded`.
+/// The `amount_to_capture` can be specified in the request body; it must be less than or equal to the payment's `amount_capturable`. If omitted, the full capturable amount is captured.
+///
+/// A payment must be in a capturable state (e.g., `requires_capture`). Attempting to capture an already `succeeded` (and fully captured) payment or one in an invalid state will lead to an error.
+///
 #[utoipa::path(
     post,
     path = "/payments/{payment_id}/capture",
@@ -373,7 +898,7 @@ pub fn payments_confirm() {}
     ),
     responses(
         (status = 200, description = "Payment captured", body = PaymentsResponse),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Capture a Payment",
@@ -391,7 +916,7 @@ pub fn payments_capture() {}
   request_body=PaymentsSessionRequest,
   responses(
       (status = 200, description = "Payment session object created or session token was retrieved from wallets", body = PaymentsSessionResponse),
-      (status = 400, description = "Missing mandatory fields")
+      (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Create Session tokens for a Payment",
@@ -412,11 +937,11 @@ pub fn payments_connector_session() {}
     request_body=PaymentsSessionRequest,
     responses(
         (status = 200, description = "Payment session object created or session token was retrieved from wallets", body = PaymentsSessionResponse),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
-    operation_id = "Create Session tokens for a Payment",
-    security(("publishable_key" = []))
+    operation_id = "Create V2 Session tokens for a Payment",
+    security(("publishable_key__client_secret" = []))
 )]
 pub fn payments_connector_session() {}
 
@@ -446,13 +971,66 @@ pub fn payments_connector_session() {}
     ),
     responses(
         (status = 200, description = "Payment canceled"),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Cancel a Payment",
     security(("api_key" = []))
 )]
 pub fn payments_cancel() {}
+
+/// Payments - Cancel Post Capture
+///
+/// A Payment could can be cancelled when it is in one of these statuses: `succeeded`, `partially_captured`, `partially_captured_and_capturable`.
+#[utoipa::path(
+    post,
+    path = "/payments/{payment_id}/cancel_post_capture",
+    request_body (
+        content = PaymentsCancelPostCaptureRequest,
+        examples(
+            (
+                "Cancel the payment post capture with minimal fields" = (
+                    value = json!({})
+                )
+            ),
+            (
+                "Cancel the payment post capture with cancellation reason" = (
+                    value = json!({"cancellation_reason": "requested_by_customer"})
+                )
+            ),
+        )
+    ),
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
+    responses(
+        (status = 200, description = "Payment canceled post capture", body = PaymentsResponse),
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Cancel a Payment Post Capture",
+    security(("api_key" = []))
+)]
+pub fn payments_cancel_post_capture() {}
+
+/// Payments - Cancel Post Capture Retrieve
+///
+/// Retrieves a canceled Payment post capture
+#[utoipa::path(
+    get,
+    path = "/payments/{payment_id}/cancel_post_capture",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
+    responses(
+        (status = 200, description = "Payment canceled post capture", body = PaymentsResponse),
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Cancel a Payment Post Capture Retrieve",
+    security(("api_key" = []))
+)]
+pub fn payments_cancel_post_capture_retrieve() {}
 
 /// Payments - List
 ///
@@ -462,15 +1040,15 @@ pub fn payments_cancel() {}
     get,
     path = "/payments/list",
     params(
-        ("customer_id" = String, Query, description = "The identifier for the customer"),
-        ("starting_after" = String, Query, description = "A cursor for use in pagination, fetch the next list after some object"),
-        ("ending_before" = String, Query, description = "A cursor for use in pagination, fetch the previous list before some object"),
-        ("limit" = i64, Query, description = "Limit on the number of objects to return"),
-        ("created" = PrimitiveDateTime, Query, description = "The time at which payment is created"),
-        ("created_lt" = PrimitiveDateTime, Query, description = "Time less than the payment created time"),
-        ("created_gt" = PrimitiveDateTime, Query, description = "Time greater than the payment created time"),
-        ("created_lte" = PrimitiveDateTime, Query, description = "Time less than or equals to the payment created time"),
-        ("created_gte" = PrimitiveDateTime, Query, description = "Time greater than or equals to the payment created time")
+        ("customer_id" = Option<String>, Query, description = "The identifier for the customer"),
+        ("starting_after" = Option<String>, Query, description = "A cursor for use in pagination, fetch the next list after some object"),
+        ("ending_before" = Option<String>, Query, description = "A cursor for use in pagination, fetch the previous list before some object"),
+        ("limit" = Option<i64>, Query, description = "Limit on the number of objects to return"),
+        ("created" = Option<PrimitiveDateTime>, Query, description = "The time at which payment is created"),
+        ("created_lt" = Option<PrimitiveDateTime>, Query, description = "Time less than the payment created time"),
+        ("created_gt" = Option<PrimitiveDateTime>, Query, description = "Time greater than the payment created time"),
+        ("created_lte" = Option<PrimitiveDateTime>, Query, description = "Time less than or equals to the payment created time"),
+        ("created_gte" = Option<PrimitiveDateTime>, Query, description = "Time greater than or equals to the payment created time")
     ),
     responses(
         (status = 200, description = "Successfully retrieved a payment list", body = Vec<PaymentListResponse>),
@@ -521,13 +1099,33 @@ pub async fn profile_payments_list() {}
   ),
   responses(
       (status = 200, description = "Payment authorized amount incremented", body = PaymentsResponse),
-      (status = 400, description = "Missing mandatory fields")
+      (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Increment authorized amount for a Payment",
   security(("api_key" = []))
 )]
 pub fn payments_incremental_authorization() {}
+
+/// Payments - Extended Authorization
+///
+/// Extended authorization is available for payments currently in the `requires_capture` status
+/// Call this endpoint to increase the authorization validity period
+#[utoipa::path(
+    post,
+    path = "/payments/{payment_id}/extend_authorization",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
+    responses(
+        (status = 200, description = "Extended authorization for the payment"),
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Extend authorization period for a Payment",
+    security(("api_key" = []))
+)]
+pub fn payments_extend_authorization() {}
 
 /// Payments - External 3DS Authentication
 ///
@@ -541,7 +1139,7 @@ pub fn payments_incremental_authorization() {}
   ),
   responses(
       (status = 200, description = "Authentication created", body = PaymentsExternalAuthenticationResponse),
-      (status = 400, description = "Missing mandatory fields")
+      (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Initiate external authentication for a Payment",
@@ -552,14 +1150,14 @@ pub fn payments_external_authentication() {}
 /// Payments - Complete Authorize
 #[utoipa::path(
   post,
-  path = "/{payment_id}/complete_authorize",
+  path = "/payments/{payment_id}/complete_authorize",
   request_body=PaymentsCompleteAuthorizeRequest,
   params(
     ("payment_id" =String, Path, description =  "The identifier for payment")
   ),
  responses(
       (status = 200, description = "Payments Complete Authorize Success", body = PaymentsResponse),
-      (status = 400, description = "Missing mandatory fields")
+      (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Complete Authorize a Payment",
@@ -574,7 +1172,7 @@ pub fn payments_complete_authorize() {}
     request_body=PaymentsDynamicTaxCalculationRequest,
     responses(
         (status = 200, description = "Tax Calculation is done", body = PaymentsDynamicTaxCalculationResponse),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Create Tax Calculation for a Payment",
@@ -587,10 +1185,13 @@ pub fn payments_dynamic_tax_calculation() {}
 #[utoipa::path(
     post,
     path = "/payments/{payment_id}/post_session_tokens",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
     request_body=PaymentsPostSessionTokensRequest,
     responses(
         (status = 200, description = "Post Session Token is done", body = PaymentsPostSessionTokensResponse),
-        (status = 400, description = "Missing mandatory fields")
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
     ),
     tag = "Payments",
     operation_id = "Create Post Session Tokens for a Payment",
@@ -598,6 +1199,69 @@ pub fn payments_dynamic_tax_calculation() {}
 )]
 
 pub fn payments_post_session_tokens() {}
+
+/// Payments - Update Metadata
+#[utoipa::path(
+    post,
+    path = "/payments/{payment_id}/update_metadata",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
+    request_body=PaymentsUpdateMetadataRequest,
+    responses(
+        (status = 200, description = "Metadata updated successfully", body = PaymentsUpdateMetadataResponse),
+        (status = 400, description = "Missing mandatory fields", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Update Metadata for a Payment",
+    security(("api_key" = []))
+)]
+pub fn payments_update_metadata() {}
+
+/// Payments - Submit Eligibility Check Data
+#[utoipa::path(
+    post,
+    path = "/payments/{payment_id}/eligibility_check",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for payment")
+    ),
+    request_body=PaymentsEligibilityCheckRequest,
+    responses(
+        (status = 200, description = "Eligibility Check submit is successful", body = PaymentsEligibilityCheckResponse),
+        (status = 400, description = "Bad Request", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Submit Eligibility Check data for a Payment",
+    security(("publishable_key" = []))
+)]
+pub fn payments_submit_eligibility_check() {}
+
+/// Payments - Submit Eligibility Data
+///
+/// Runs eligibility checks (blocklist, card testing guard) and calculates an external surcharge
+/// in a single call. Intended to be called by the SDK before the final confirm step.
+///
+/// - If eligibility is denied the response will contain `sdk_next_action: deny` and no surcharge details.
+/// - If the merchant has no surcharge connector configured, `surcharge_details` will be `null`.
+/// - Surcharge calculation is best-effort: if the external call fails the payment still proceeds
+///   with `surcharge_details: null`.
+#[utoipa::path(
+    post,
+    path = "/payments/{payment_id}/eligibility",
+    params(
+        ("payment_id" = String, Path, description = "The identifier for the payment")
+    ),
+    request_body = PaymentsEligibilityRequest,
+    responses(
+        (status = 200, description = "Eligibility and surcharge checks successful", body = PaymentsEligibilityResponse),
+        (status = 400, description = "Bad Request", body = GenericErrorResponseOpenApi),
+        (status = 404, description = "Payment not found", body = GenericErrorResponseOpenApi)
+    ),
+    tag = "Payments",
+    operation_id = "Submit Eligibility data for a Payment",
+    security(("publishable_key" = []))
+)]
+pub fn payments_submit_eligibility() {}
 
 /// Payments - Create Intent
 ///
@@ -619,7 +1283,7 @@ pub fn payments_post_session_tokens() {}
   ),
   responses(
       (status = 200, description = "Payment created", body = PaymentsIntentResponse),
-      (status = 400, description = "Missing Mandatory fields")
+      (status = 400, description = "Missing Mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Create a Payment Intent",
@@ -697,12 +1361,7 @@ pub fn payments_update_intent() {}
         "X-Profile-Id" = String, Header,
         description = "Profile ID associated to the payment intent",
         example = "pro_abcdefghijklmnop"
-      ),
-      (
-        "X-Client-Secret" = String, Header,
-        description = "Client Secret Associated with the payment intent",
-        example = json!({"X-Client-Secret": "12345_pay_0193e41106e07e518940f8b51b9c8121_secret_0193e41107027a928d61d292e6a5dba9"})
-      ),
+      )
     ),
   request_body(
       content = PaymentsConfirmIntentRequest,
@@ -728,11 +1387,11 @@ pub fn payments_update_intent() {}
   ),
   responses(
       (status = 200, description = "Payment created", body = PaymentsResponse),
-      (status = 400, description = "Missing Mandatory fields")
+      (status = 400, description = "Missing Mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Confirm Payment Intent",
-  security(("publishable_key" = [])),
+  security(("publishable_key__client_secret" = [])),
 )]
 #[cfg(feature = "v2")]
 pub fn payments_confirm_intent() {}
@@ -801,7 +1460,7 @@ pub fn payment_status() {}
   ),
   responses(
       (status = 200, description = "Payment created", body = PaymentsResponse),
-      (status = 400, description = "Missing Mandatory fields")
+      (status = 400, description = "Missing Mandatory fields", body = GenericErrorResponseOpenApi)
   ),
   tag = "Payments",
   operation_id = "Create and Confirm Payment Intent",
@@ -832,11 +1491,6 @@ pub(crate) enum ForceSync {
           description = "Profile ID associated to the payment intent",
           example = "pro_abcdefghijklmnop"
         ),
-        (
-          "X-Client-Secret" = String, Header,
-          description = "Client Secret Associated with the payment intent",
-          example = json!({"X-Client-Secret": "12345_pay_0193e41106e07e518940f8b51b9c8121_secret_0193e41107027a928d61d292e6a5dba9"})
-        ),
     ),
     responses(
         (status = 200, description = "Get the payment methods", body = PaymentMethodListResponseForPayments),
@@ -844,7 +1498,7 @@ pub(crate) enum ForceSync {
     ),
     tag = "Payments",
     operation_id = "Retrieve Payment methods for a Payment",
-    security(("publishable_key" = []))
+    security(("publishable_key__client_secret" = []))
 )]
 pub fn list_payment_methods() {}
 
@@ -865,3 +1519,30 @@ pub fn list_payment_methods() {}
     security(("api_key" = []), ("jwt_key" = []))
 )]
 pub fn payments_list() {}
+
+/// Payments - Check Balance and Apply PM Data
+///
+/// Check the balance of the payment methods, apply the payment method data and recalculate remaining_amount and surcharge
+#[cfg(feature = "v2")]
+#[utoipa::path(
+    post,
+    path = "/v2/payments/{id}/eligibility/check-balance-and-apply-pm-data",
+    params(
+        ("id" = String, Path, description = "The global payment id"),
+        (
+          "X-Profile-Id" = String, Header,
+          description = "Profile ID associated to the payment intent",
+          example = "pro_abcdefghijklmnop"
+        ),
+    ),
+    request_body(
+      content = ApplyPaymentMethodDataRequest,
+    ),
+    responses(
+        (status = 200, description = "Apply the Payment Method Data", body = CheckAndApplyPaymentMethodDataResponse),
+    ),
+    tag = "Payments",
+    operation_id = "Apply Payment Method Data",
+    security(("publishable_key__client_secret" = []))
+)]
+pub fn payments_apply_pm_data() {}

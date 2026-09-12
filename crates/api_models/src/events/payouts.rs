@@ -2,14 +2,15 @@ use common_utils::events::{ApiEventMetric, ApiEventsType};
 
 use crate::payouts::{
     PayoutActionRequest, PayoutCreateRequest, PayoutCreateResponse, PayoutLinkInitiateRequest,
-    PayoutListConstraints, PayoutListFilterConstraints, PayoutListFilters, PayoutListResponse,
-    PayoutRetrieveRequest,
+    PayoutListConstraints, PayoutListFilterConstraints, PayoutListFilters, PayoutListFiltersV2,
+    PayoutListResponse, PayoutRetrieveRequest, PayoutsAggregateResponse,
+    PayoutsManualUpdateRequest, PayoutsManualUpdateResponse,
 };
 
 impl ApiEventMetric for PayoutRetrieveRequest {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::Payout {
-            payout_id: self.payout_id.clone(),
+            payout_id: self.payout_id.to_owned(),
         })
     }
 }
@@ -17,7 +18,7 @@ impl ApiEventMetric for PayoutRetrieveRequest {
 impl ApiEventMetric for PayoutCreateRequest {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         self.payout_id.as_ref().map(|id| ApiEventsType::Payout {
-            payout_id: id.clone(),
+            payout_id: id.to_owned(),
         })
     }
 }
@@ -25,7 +26,7 @@ impl ApiEventMetric for PayoutCreateRequest {
 impl ApiEventMetric for PayoutCreateResponse {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::Payout {
-            payout_id: self.payout_id.clone(),
+            payout_id: self.payout_id.to_owned(),
         })
     }
 }
@@ -33,7 +34,7 @@ impl ApiEventMetric for PayoutCreateResponse {
 impl ApiEventMetric for PayoutActionRequest {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::Payout {
-            payout_id: self.payout_id.clone(),
+            payout_id: self.payout_id.to_owned(),
         })
     }
 }
@@ -62,10 +63,38 @@ impl ApiEventMetric for PayoutListFilters {
     }
 }
 
+impl ApiEventMetric for PayoutListFiltersV2 {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::ResourceListAPI)
+    }
+}
+
 impl ApiEventMetric for PayoutLinkInitiateRequest {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::Payout {
-            payout_id: self.payout_id.clone(),
+            payout_id: self.payout_id.to_owned(),
+        })
+    }
+}
+
+impl ApiEventMetric for PayoutsAggregateResponse {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::ResourceListAPI)
+    }
+}
+
+impl ApiEventMetric for PayoutsManualUpdateRequest {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Payout {
+            payout_id: self.payout_id.to_owned(),
+        })
+    }
+}
+
+impl ApiEventMetric for PayoutsManualUpdateResponse {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Payout {
+            payout_id: self.payout_id.to_owned(),
         })
     }
 }

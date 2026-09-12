@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 
 use api_models::{self, enums as api_enums};
-use common_enums::CaptureMethod;
+use common_enums::{CaptureMethod, PreFrmFailureMode};
 use error_stack::ResultExt;
-use masking::PeekInterface;
+use hyperswitch_masking::PeekInterface;
 use router_env::{
     logger,
     tracing::{self, instrument},
@@ -19,11 +19,12 @@ use self::{
 use super::errors::{ConnectorErrorExt, RouterResponse};
 use crate::{
     core::{
+        configs::dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
         errors::{self, RouterResult},
         payments::{self, flows::ConstructFlowSpecificData, operations::BoxedOperation},
     },
     db::StorageInterface,
-    routes::{app::ReqState, SessionState},
+    routes::{app::ReqState, metrics, SessionState},
     services,
     types::{
         self as oss_types,
@@ -53,9 +54,7 @@ pub async fn call_frm_service<D: Clone, F, Req, OperationData>(
     state: &SessionState,
     payment_data: &OperationData,
     frm_data: &mut FrmData,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
-    customer: &Option<domain::Customer>,
+    platform: &domain::Platform,
 ) -> RouterResult<oss_types::RouterData<F, Req, frm_types::FraudCheckResponseData>>
 where
     F: Send + Clone,
@@ -78,9 +77,7 @@ pub async fn call_frm_service<D: Clone, F, Req, OperationData>(
     state: &SessionState,
     payment_data: &OperationData,
     frm_data: &mut FrmData,
-    merchant_account: &domain::MerchantAccount,
-    key_store: &domain::MerchantKeyStore,
-    customer: &Option<domain::Customer>,
+    platform: &domain::Platform,
 ) -> RouterResult<oss_types::RouterData<F, Req, frm_types::FraudCheckResponseData>>
 where
     F: Send + Clone,
@@ -96,11 +93,10 @@ where
 {
     let merchant_connector_account = payments::construct_profile_id_and_get_mca(
         state,
-        merchant_account,
+        platform.get_processor(),
         payment_data,
         &frm_data.connector_details.connector_name,
         None,
-        key_store,
         false,
     )
     .await?;
@@ -114,10 +110,10 @@ where
         .construct_router_data(
             state,
             &frm_data.connector_details.connector_name,
-            merchant_account,
-            key_store,
-            customer,
+            platform.get_processor(),
             &merchant_connector_account,
+            None,
+            None,
             None,
             None,
         )
@@ -141,7 +137,7 @@ where
             state,
             &connector,
             payments::CallConnectorAction::Trigger,
-            merchant_account,
+            platform,
         )
         .await?;
 
@@ -150,10 +146,9 @@ where
 
 #[cfg(feature = "v2")]
 pub async fn should_call_frm<F, D>(
-    _merchant_account: &domain::MerchantAccount,
+    _platform: &domain::Platform,
     _payment_data: &D,
     _state: &SessionState,
-    _key_store: domain::MerchantKeyStore,
 ) -> RouterResult<(
     bool,
     Option<FrmRoutingAlgorithm>,
@@ -171,10 +166,9 @@ where
 
 #[cfg(feature = "v1")]
 pub async fn should_call_frm<F, D>(
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: &D,
     state: &SessionState,
-    key_store: domain::MerchantKeyStore,
 ) -> RouterResult<(
     bool,
     Option<FrmRoutingAlgorithm>,
@@ -186,16 +180,21 @@ where
     D: payments::OperationSessionGetters<F> + Send + Sync + Clone,
 {
     use common_utils::ext_traits::OptionExt;
-    use masking::ExposeInterface;
+    use hyperswitch_masking::ExposeInterface;
 
     let db = &*state.store;
-    match merchant_account.frm_routing_algorithm.clone() {
+    match platform
+        .get_processor()
+        .get_account()
+        .frm_routing_algorithm
+        .clone()
+    {
         Some(frm_routing_algorithm_value) => {
             let frm_routing_algorithm_struct: FrmRoutingAlgorithm = frm_routing_algorithm_value
                 .clone()
                 .parse_value("FrmRoutingAlgorithm")
                 .change_context(errors::ApiErrorResponse::MissingRequiredField {
-                    field_name: "frm_routing_algorithm",
+                    field_name: "frm_routing_algorithm".into(),
                 })
                 .attach_printable("Data field not found in frm_routing_algorithm")?;
 
@@ -211,10 +210,9 @@ where
             #[cfg(feature = "v1")]
             let merchant_connector_account_from_db_option = db
                 .find_merchant_connector_account_by_profile_id_connector_name(
-                    &state.into(),
                     &profile_id,
                     &frm_routing_algorithm_struct.data,
-                    &key_store,
+                    platform.get_processor().get_key_store(),
                 )
                 .await
                 .map_err(|error| {
@@ -222,7 +220,12 @@ where
                         "{:?}",
                         error.change_context(
                             errors::ApiErrorResponse::MerchantConnectorAccountNotFound {
-                                id: merchant_account.get_id().get_string_repr().to_owned(),
+                                id: platform
+                                    .get_processor()
+                                    .get_account()
+                                    .get_id()
+                                    .get_string_repr()
+                                    .to_owned(),
                             }
                         )
                     )
@@ -253,7 +256,7 @@ where
                     let frm_configs_option = merchant_connector_account_from_db
                         .frm_configs
                         .ok_or(errors::ApiErrorResponse::MissingRequiredField {
-                            field_name: "frm_configs",
+                            field_name: "frm_configs".into(),
                         })
                         .ok();
                     match frm_configs_option {
@@ -264,7 +267,7 @@ where
                                     .expose()
                                     .parse_value("FrmConfigs")
                                     .change_context(errors::ApiErrorResponse::InvalidDataFormat {
-                                            field_name: "frm_configs".to_string(),
+                                            field_name: "frm_configs".into(),
                                             expected_format: r#"[{ "gateway": "stripe", "payment_methods": [{ "payment_method": "card","flow": "post"}]}]"#.to_string(),
                                         })
                                 })
@@ -343,7 +346,7 @@ where
                                         })
                                     }))
                                     .ok_or(errors::ApiErrorResponse::InvalidDataFormat {
-                                            field_name: "frm_configs".to_string(),
+                                            field_name: "frm_configs".into(),
                                             expected_format: r#"[{ "gateway": "stripe", "payment_methods": [{ "payment_method": "card","flow": "post"}]}]"#.to_string(),
                                     })?,
                             };
@@ -382,12 +385,11 @@ where
 pub async fn make_frm_data_and_fraud_check_operation<F, D>(
     _db: &dyn StorageInterface,
     state: &SessionState,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: D,
     frm_routing_algorithm: FrmRoutingAlgorithm,
     profile_id: common_utils::id_type::ProfileId,
     frm_configs: FrmConfigsObject,
-    _customer: &Option<domain::Customer>,
 ) -> RouterResult<FrmInfo<F, D>>
 where
     F: Send + Clone,
@@ -405,12 +407,11 @@ where
 pub async fn make_frm_data_and_fraud_check_operation<F, D>(
     _db: &dyn StorageInterface,
     state: &SessionState,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: D,
     frm_routing_algorithm: FrmRoutingAlgorithm,
     profile_id: common_utils::id_type::ProfileId,
     frm_configs: FrmConfigsObject,
-    _customer: &Option<domain::Customer>,
 ) -> RouterResult<FrmInfo<F, D>>
 where
     F: Send + Clone,
@@ -428,7 +429,7 @@ where
             // when the order_details are present within the meta_data, we need to take those to support backward compatibility
             payment_data.get_payment_intent().metadata.clone().and_then(|meta| {
                 let order_details = meta.get("order_details").to_owned();
-                order_details.map(|order| vec![masking::Secret::new(order.to_owned())])
+                order_details.map(|order| vec![hyperswitch_masking::Secret::new(order.to_owned())])
             }))
         .map(|order_details_value| {
             order_details_value
@@ -452,7 +453,7 @@ where
         amount: payment_data.get_amount(),
         payment_intent: payment_data.get_payment_intent().to_owned(),
         payment_attempt: payment_data.get_payment_attempt().to_owned(),
-        merchant_account: merchant_account.to_owned(),
+        merchant_account: platform.get_processor().get_account().to_owned(),
         address: payment_data.get_address().clone(),
         connector_details: frm_connector_details.clone(),
         order_details,
@@ -488,15 +489,14 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn pre_payment_frm_core<F, Req, D>(
     state: &SessionState,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: &mut D,
     frm_info: &mut FrmInfo<F, D>,
     frm_configs: FrmConfigsObject,
-    customer: &Option<domain::Customer>,
     should_continue_transaction: &mut bool,
     should_continue_capture: &mut bool,
-    key_store: domain::MerchantKeyStore,
     operation: &BoxedOperation<'_, F, Req, D>,
+    failure_mode: &PreFrmFailureMode,
 ) -> RouterResult<Option<FrmData>>
 where
     F: Send + Clone,
@@ -517,29 +517,24 @@ where
 
                 let frm_router_data = fraud_check_operation
                     .to_domain()?
-                    .pre_payment_frm(
-                        state,
-                        payment_data,
-                        frm_data,
-                        merchant_account,
-                        customer,
-                        key_store.clone(),
-                    )
+                    .pre_payment_frm(state, payment_data, frm_data, platform)
                     .await?;
-                let _router_data = call_frm_service::<F, frm_api::Transaction, _, D>(
+                let _router_data_result = call_frm_service::<F, frm_api::Transaction, _, D>(
                     state,
                     payment_data,
                     frm_data,
-                    merchant_account,
-                    &key_store,
-                    customer,
+                    platform,
                 )
-                .await?;
+                .await;
+                // Log warning if transaction flow failed (but don't propagate error)
+                if let Err(e) = _router_data_result {
+                    logger::info!("FRM transaction flow failed : {:?}", e);
+                }
                 let frm_data_updated = fraud_check_operation
                     .to_update_tracker()?
                     .update_tracker(
                         state,
-                        &key_store,
+                        platform.get_processor().get_key_store(),
                         frm_data.clone(),
                         payment_data,
                         None,
@@ -548,7 +543,7 @@ where
                     .await?;
                 let frm_fraud_check = frm_data_updated.fraud_check.clone();
                 payment_data.set_frm_message(frm_fraud_check.clone());
-                if matches!(frm_fraud_check.frm_status, FraudCheckStatus::Fraud) {
+                if frm_fraud_check.frm_status.should_stop_payment(failure_mode) {
                     *should_continue_transaction = false;
                     frm_info.suggested_action = Some(FrmSuggestion::FrmCancelTransaction);
                 }
@@ -578,17 +573,71 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn decide_and_run_pre_frm<F, Req, D>(
+    operation: &BoxedOperation<'_, F, Req, D>,
+    platform: &domain::Platform,
+    payment_data: &mut D,
+    state: &SessionState,
+    frm_info: &mut Option<FrmInfo<F, D>>,
+    should_continue_transaction: &mut bool,
+    should_continue_capture: &mut bool,
+    failure_mode: &PreFrmFailureMode,
+) -> RouterResult<Option<FrmConfigsObject>>
+where
+    F: Send + Clone,
+    D: payments::OperationSessionGetters<F>
+        + payments::OperationSessionSetters<F>
+        + Send
+        + Sync
+        + Clone,
+{
+    let (is_frm_enabled, frm_routing_algorithm, frm_connector_label, frm_configs) =
+        should_call_frm(platform, payment_data, state).await?;
+    if let Some((frm_routing_algorithm_val, profile_id)) =
+        frm_routing_algorithm.zip(frm_connector_label)
+    {
+        if let Some(frm_configs) = frm_configs.clone() {
+            let mut updated_frm_info = Box::pin(make_frm_data_and_fraud_check_operation(
+                &*state.store,
+                state,
+                platform,
+                payment_data.to_owned(),
+                frm_routing_algorithm_val,
+                profile_id,
+                frm_configs.clone(),
+            ))
+            .await?;
+
+            if is_frm_enabled {
+                Box::pin(pre_payment_frm_core(
+                    state,
+                    platform,
+                    payment_data,
+                    &mut updated_frm_info,
+                    frm_configs,
+                    should_continue_transaction,
+                    should_continue_capture,
+                    operation,
+                    failure_mode,
+                ))
+                .await?;
+            }
+            *frm_info = Some(updated_frm_info);
+        }
+    }
+    logger::debug!("frm_configs: {:?} {:?}", frm_configs, is_frm_enabled);
+    Ok(frm_configs)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn post_payment_frm_core<F, D>(
     state: &SessionState,
     req_state: ReqState,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: &mut D,
     frm_info: &mut FrmInfo<F, D>,
     frm_configs: FrmConfigsObject,
-    customer: &Option<domain::Customer>,
-    key_store: domain::MerchantKeyStore,
     should_continue_capture: &mut bool,
-    platform_merchant_account: Option<&domain::MerchantAccount>,
 ) -> RouterResult<Option<FrmData>>
 where
     F: Send + Clone,
@@ -605,22 +654,14 @@ where
         if payment_data.get_payment_attempt().status == AttemptStatus::Authorized {
             let frm_router_data_opt = fraud_check_operation
                 .to_domain()?
-                .post_payment_frm(
-                    state,
-                    req_state.clone(),
-                    payment_data,
-                    frm_data,
-                    merchant_account,
-                    customer,
-                    key_store.clone(),
-                )
+                .post_payment_frm(state, req_state.clone(), payment_data, frm_data, platform)
                 .await?;
             if let Some(frm_router_data) = frm_router_data_opt {
                 let mut frm_data = fraud_check_operation
                     .to_update_tracker()?
                     .update_tracker(
                         state,
-                        &key_store,
+                        platform.get_processor().get_key_store(),
                         frm_data.to_owned(),
                         payment_data,
                         None,
@@ -641,14 +682,11 @@ where
                         state,
                         req_state,
                         &mut frm_data,
-                        merchant_account,
+                        platform,
                         frm_configs,
                         &mut frm_suggestion,
-                        key_store.clone(),
                         payment_data,
-                        customer,
                         should_continue_capture,
-                        platform_merchant_account,
                     )
                     .await?;
                 logger::debug!("frm_post_tasks_data: {:?}", frm_data);
@@ -656,7 +694,7 @@ where
                     .to_update_tracker()?
                     .update_tracker(
                         state,
-                        &key_store,
+                        platform.get_processor().get_key_store(),
                         frm_data.to_owned(),
                         payment_data,
                         frm_suggestion,
@@ -676,14 +714,13 @@ where
 #[allow(clippy::too_many_arguments)]
 pub async fn call_frm_before_connector_call<F, Req, D>(
     operation: &BoxedOperation<'_, F, Req, D>,
-    merchant_account: &domain::MerchantAccount,
+    platform: &domain::Platform,
     payment_data: &mut D,
     state: &SessionState,
     frm_info: &mut Option<FrmInfo<F, D>>,
-    customer: &Option<domain::Customer>,
     should_continue_transaction: &mut bool,
     should_continue_capture: &mut bool,
-    key_store: domain::MerchantKeyStore,
+    dimensions: &DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
 ) -> RouterResult<Option<FrmConfigsObject>>
 where
     F: Send + Clone,
@@ -693,42 +730,56 @@ where
         + Sync
         + Clone,
 {
-    let (is_frm_enabled, frm_routing_algorithm, frm_connector_label, frm_configs) =
-        should_call_frm(merchant_account, payment_data, state, key_store.clone()).await?;
-    if let Some((frm_routing_algorithm_val, profile_id)) =
-        frm_routing_algorithm.zip(frm_connector_label)
-    {
-        if let Some(frm_configs) = frm_configs.clone() {
-            let mut updated_frm_info = Box::pin(make_frm_data_and_fraud_check_operation(
-                &*state.store,
-                state,
-                merchant_account,
-                payment_data.to_owned(),
-                frm_routing_algorithm_val,
-                profile_id,
-                frm_configs.clone(),
-                customer,
-            ))
-            .await?;
+    let failure_mode = dimensions
+        .get_pre_frm_failure_mode(
+            state.store.as_ref(),
+            state.superposition_service.as_ref(),
+            None,
+        )
+        .await;
 
-            if is_frm_enabled {
-                pre_payment_frm_core(
-                    state,
-                    merchant_account,
-                    payment_data,
-                    &mut updated_frm_info,
-                    frm_configs,
-                    customer,
-                    should_continue_transaction,
-                    should_continue_capture,
-                    key_store,
-                    operation,
-                )
-                .await?;
+    let frm_configs = match Box::pin(decide_and_run_pre_frm(
+        operation,
+        platform,
+        payment_data,
+        state,
+        frm_info,
+        should_continue_transaction,
+        should_continue_capture,
+        &failure_mode,
+    ))
+    .await
+    {
+        Ok(frm_configs) => Ok(frm_configs),
+        Err(e) => {
+            match failure_mode {
+                PreFrmFailureMode::FailOpen => {
+                    // Log the error
+                    logger::info!(
+                        "FRM actions before connector call failed, continuing due to FailOpen mode. Error: {:?}",
+                        e
+                    );
+                    metrics::FRM_FAILURE.add(
+                        1,
+                        router_env::metric_attributes!(
+                            (
+                                "merchant_id",
+                                platform.get_processor().get_account().get_id().clone()
+                            ),
+                            ("error_type", e.current_context().to_string())
+                        ),
+                    );
+                    // Continue with default values
+                    Ok(None)
+                }
+                PreFrmFailureMode::FailClosed => {
+                    logger::info!("FRM actions before connector call failed, propagating error due to FailClosed mode");
+                    Err(e)
+                }
             }
-            *frm_info = Some(updated_frm_info);
         }
-    }
+    }?;
+
     let fraud_capture_method = frm_info.as_ref().and_then(|frm_info| {
         frm_info
             .frm_data
@@ -750,7 +801,6 @@ where
             fraud_capture_method
         );
     };
-    logger::debug!("frm_configs: {:?} {:?}", frm_configs, is_frm_enabled);
     Ok(frm_configs)
 }
 
@@ -782,18 +832,16 @@ impl From<PaymentToFrmData> for PaymentDetails {
 #[instrument(skip_all)]
 pub async fn frm_fulfillment_core(
     state: SessionState,
-    merchant_account: domain::MerchantAccount,
-    key_store: domain::MerchantKeyStore,
+    platform: domain::Platform,
     req: frm_core_types::FrmFulfillmentRequest,
 ) -> RouterResponse<frm_types::FraudCheckResponseData> {
     let db = &*state.clone().store;
     let payment_intent = db
-        .find_payment_intent_by_payment_id_merchant_id(
-            &(&state).into(),
+        .find_payment_intent_by_payment_id_processor_merchant_id(
             &req.payment_id.clone(),
-            merchant_account.get_id(),
-            &key_store,
-            merchant_account.storage_scheme,
+            platform.get_processor().get_account().get_id(),
+            platform.get_processor().get_key_store(),
+            platform.get_processor().get_account().storage_scheme,
         )
         .await
         .change_context(errors::ApiErrorResponse::PaymentNotFound)?;
@@ -805,7 +853,7 @@ pub async fn frm_fulfillment_core(
             let existing_fraud_check = db
                 .find_fraud_check_by_payment_id_if_present(
                     req.payment_id.clone(),
-                    merchant_account.get_id().clone(),
+                    platform.get_processor().get_account().get_id().clone(),
                 )
                 .await
                 .change_context(invalid_request_error.to_owned())?;
@@ -821,8 +869,7 @@ pub async fn frm_fulfillment_core(
                             fraud_check,
                             payment_intent,
                             state,
-                            merchant_account,
-                            key_store,
+                            platform,
                             req,
                         ))
                         .await
@@ -847,15 +894,16 @@ pub async fn make_fulfillment_api_call(
     fraud_check: FraudCheck,
     payment_intent: PaymentIntent,
     state: SessionState,
-    merchant_account: domain::MerchantAccount,
-    key_store: domain::MerchantKeyStore,
+    platform: domain::Platform,
     req: frm_core_types::FrmFulfillmentRequest,
 ) -> RouterResponse<frm_types::FraudCheckResponseData> {
     let payment_attempt = db
-        .find_payment_attempt_by_attempt_id_merchant_id(
+        .find_payment_attempt_by_payment_id_processor_merchant_id_attempt_id(
+            &payment_intent.payment_id,
+            platform.get_processor().get_account().get_id(),
             &payment_intent.active_attempt.get_id(),
-            merchant_account.get_id(),
-            merchant_account.storage_scheme,
+            platform.get_processor().get_account().storage_scheme,
+            platform.get_processor().get_key_store(),
         )
         .await
         .change_context(errors::ApiErrorResponse::PaymentNotFound)?;
@@ -869,8 +917,7 @@ pub async fn make_fulfillment_api_call(
         &state,
         &payment_intent,
         &payment_attempt,
-        &merchant_account,
-        &key_store,
+        platform.get_processor(),
         fraud_check.frm_name.clone(),
         req,
     )
@@ -880,6 +927,7 @@ pub async fn make_fulfillment_api_call(
         connector_integration,
         &router_data,
         payments::CallConnectorAction::Trigger,
+        None,
         None,
     )
     .await

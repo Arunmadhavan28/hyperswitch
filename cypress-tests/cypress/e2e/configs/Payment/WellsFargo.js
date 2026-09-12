@@ -9,7 +9,7 @@ const successfulNo3DSCardDetails = {
 };
 
 const successfulThreeDSTestCardDetails = {
-  card_number: "4000000000001091",
+  card_number: "4000000000003220", // WellsFargo 3DS friction flow card
   card_exp_month: "01",
   card_exp_year: "50",
   card_holder_name: "joseph Doe",
@@ -36,14 +36,16 @@ const multiUseMandateData = {
   },
 };
 
+const threeDsValidationData = {
+  type: "invalid_request",
+  message: "3DS not supported for WellsFargo",
+  code: "IR_00",
+};
+
 export const connectorDetails = {
   card_pm: {
     PaymentIntent: {
       Request: {
-        payment_method: "card",
-        payment_method_data: {
-          card: successfulNo3DSCardDetails,
-        },
         currency: "USD",
         customer_acceptance: null,
         setup_future_usage: "on_session",
@@ -52,6 +54,56 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_payment_method",
+        },
+      },
+    },
+    PaymentIntentOffSession: {
+      Request: {
+        currency: "USD",
+        customer_acceptance: null,
+        amount: 6000,
+        authentication_type: "no_three_ds",
+        setup_future_usage: "off_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+          setup_future_usage: "off_session",
+        },
+      },
+    },
+    PaymentIntentWithShippingCost: {
+      Request: {
+        currency: "USD",
+        shipping_cost: 50,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+          shipping_cost: 50,
+          amount: 6000,
+        },
+      },
+    },
+    PaymentConfirmWithShippingCost: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+          shipping_cost: 50,
+          amount_received: 6050,
+          amount: 6000,
+          net_amount: 6050,
         },
       },
     },
@@ -69,9 +121,9 @@ export const connectorDetails = {
         setup_future_usage: "on_session",
       },
       Response: {
-        status: 200,
+        status: 400,
         body: {
-          status: "requires_capture",
+          error: threeDsValidationData,
         },
       },
     },
@@ -89,10 +141,9 @@ export const connectorDetails = {
         setup_future_usage: "on_session",
       },
       Response: {
-        status: 200,
-
+        status: 400,
         body: {
-          status: "requires_customer_action",
+          error: threeDsValidationData,
         },
       },
     },
@@ -210,10 +261,9 @@ export const connectorDetails = {
         mandate_data: singleUseMandateData,
       },
       Response: {
-        status: 200,
-
+        status: 400,
         body: {
-          status: "succeeded",
+          error: threeDsValidationData,
         },
       },
     },
@@ -231,7 +281,6 @@ export const connectorDetails = {
       },
       Response: {
         status: 200,
-
         body: {
           status: "requires_customer_action",
         },
@@ -315,9 +364,8 @@ export const connectorDetails = {
       },
       Response: {
         status: 200,
-
         body: {
-          status: "requires_capture",
+          status: "requires_customer_action",
         },
       },
     },
@@ -335,14 +383,31 @@ export const connectorDetails = {
       },
       Response: {
         status: 200,
-
         body: {
-          status: "requires_capture",
+          status: "requires_customer_action",
         },
       },
     },
     MITAutoCapture: {
       Request: {},
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+        },
+      },
+    },
+    MITAutoCaptureWithCustomerAcceptance: {
+      Request: {
+        customer_acceptance: {
+          acceptance_type: "offline",
+          accepted_at: "1963-05-03T04:07:52.723Z",
+          online: {
+            ip_address: "127.0.0.1",
+            user_agent: "amet irure esse",
+          },
+        },
+      },
       Response: {
         status: 200,
         body: {
@@ -356,6 +421,39 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+        },
+      },
+    },
+    ZeroAuthPaymentIntent: {
+      Request: {
+        amount: 0,
+        setup_future_usage: "off_session",
+        currency: "USD",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+          setup_future_usage: "off_session",
+        },
+      },
+    },
+    ZeroAuthConfirmPayment: {
+      Request: {
+        payment_method: "card",
+        payment_method_type: "credit",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        payment_type: "setup_mandate",
+        mandate_data: null,
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+          setup_future_usage: "off_session",
         },
       },
     },
@@ -426,6 +524,90 @@ export const connectorDetails = {
         },
       },
     },
+    SaveCardUseNo3DSAutoCaptureOffSession: {
+      Request: {
+        payment_method: "card",
+        payment_method_type: "debit",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        setup_future_usage: "off_session",
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+        },
+      },
+    },
+    SaveCardUse3DSAutoCaptureOffSession: {
+      Request: {
+        payment_method: "card",
+        payment_method_type: "debit",
+        payment_method_data: {
+          card: successfulThreeDSTestCardDetails,
+        },
+        setup_future_usage: "off_session",
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 400,
+        body: {
+          error: threeDsValidationData,
+        },
+      },
+    },
+    SaveCardUseNo3DSManualCaptureOffSession: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        setup_future_usage: "off_session",
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_capture",
+        },
+      },
+    },
+    SaveCardConfirmAutoCaptureOffSession: {
+      Request: {
+        setup_future_usage: "off_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+        },
+      },
+    },
+    SaveCardConfirmManualCaptureOffSession: {
+      Request: {
+        setup_future_usage: "off_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_capture",
+        },
+      },
+    },
+    SaveCardConfirmAutoCaptureOffSessionWithoutBilling: {
+      Request: {
+        setup_future_usage: "off_session",
+        billing: null,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+        },
+      },
+    },
     PaymentMethodIdMandateNo3DSManualCapture: {
       Request: {
         payment_method: "card",
@@ -475,9 +657,87 @@ export const connectorDetails = {
         customer_acceptance: customerAcceptance,
       },
       Response: {
+        status: 400,
+        body: {
+          error: threeDsValidationData,
+        },
+      },
+    },
+    No3DSFailPayment: {
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails, //There is no failing card for WellsFargo
+        },
+        customer_acceptance: null,
+        setup_future_usage: "on_session",
+      },
+      Response: {
         status: 200,
         body: {
-          status: "requires_customer_action",
+          status: "succeeded",
+        },
+      },
+    },
+  },
+  bank_debit_pm: {
+    PaymentIntent: (paymentMethodType) => {
+      if (paymentMethodType !== "Ach") {
+        return {
+          Configs: {
+            TRIGGER_SKIP: true,
+          },
+        };
+      }
+      return {
+        Request: {
+          currency: "USD",
+          setup_future_usage: "off_session",
+        },
+        Response: {
+          status: 200,
+          body: {
+            status: "requires_payment_method",
+          },
+        },
+      };
+    },
+    Ach: {
+      Request: {
+        payment_method: "bank_debit",
+        payment_method_type: "ach",
+        payment_method_data: {
+          bank_debit: {
+            ach_bank_debit: {
+              account_number: "000123456789",
+              routing_number: "121042882",
+              bank_account_holder_name: "John Doe",
+              bank_type: "checking",
+            },
+          },
+        },
+        billing: {
+          address: {
+            first_name: "John",
+            last_name: "Doe",
+            line1: "123 Main St",
+            city: "San Francisco",
+            state: "California",
+            zip: "94122",
+            country: "US",
+          },
+          phone: {
+            number: "4155551234",
+            country_code: "+1",
+          },
+          email: "a@gmail.com",
+        },
+        email: "a@gmail.com",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
         },
       },
     },

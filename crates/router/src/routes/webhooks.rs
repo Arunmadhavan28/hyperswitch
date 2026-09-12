@@ -7,6 +7,7 @@ use crate::{
         api_locking,
         webhooks::{self, types},
     },
+    events::api_logs::WebhookRequestPayload,
     services::{api, authentication as auth},
 };
 
@@ -22,18 +23,18 @@ pub async fn receive_incoming_webhook<W: types::OutgoingWebhookType>(
     let (merchant_id, connector_id_or_name) = path.into_inner();
 
     Box::pin(api::server_wrap(
-        flow.clone(),
+        flow,
         state,
         &req,
-        (),
+        WebhookRequestPayload {
+            connector: connector_id_or_name.clone(),
+        },
         |state, auth, _, req_state| {
             webhooks::incoming_webhooks_wrapper::<W>(
-                &flow,
                 state.to_owned(),
                 req_state,
                 &req,
-                auth.merchant_account,
-                auth.key_store,
+                auth.platform,
                 &connector_id_or_name,
                 body.clone(),
                 false,
@@ -61,18 +62,18 @@ pub async fn receive_incoming_relay_webhook<W: types::OutgoingWebhookType>(
     let is_relay_webhook = true;
 
     Box::pin(api::server_wrap(
-        flow.clone(),
+        flow,
         state,
         &req,
-        (),
+        WebhookRequestPayload {
+            connector: connector_id.get_string_repr().to_string(),
+        },
         |state, auth, _, req_state| {
             webhooks::incoming_webhooks_wrapper::<W>(
-                &flow,
                 state.to_owned(),
                 req_state,
                 &req,
-                auth.merchant_account,
-                auth.key_store,
+                auth.platform,
                 connector_id.get_string_repr(),
                 body.clone(),
                 is_relay_webhook,
@@ -101,19 +102,19 @@ pub async fn receive_incoming_relay_webhook<W: types::OutgoingWebhookType>(
     let is_relay_webhook = true;
 
     Box::pin(api::server_wrap(
-        flow.clone(),
+        flow,
         state,
         &req,
-        (),
+        WebhookRequestPayload {
+            connector: connector_id.clone(),
+        },
         |state, auth, _, req_state| {
             webhooks::incoming_webhooks_wrapper::<W>(
-                &flow,
                 state.to_owned(),
                 req_state,
                 &req,
-                auth.merchant_account,
+                auth.platform,
                 auth.profile,
-                auth.key_store,
                 &connector_id,
                 body.clone(),
                 is_relay_webhook,
@@ -144,19 +145,19 @@ pub async fn receive_incoming_webhook<W: types::OutgoingWebhookType>(
     let (merchant_id, profile_id, connector_id) = path.into_inner();
 
     Box::pin(api::server_wrap(
-        flow.clone(),
+        flow,
         state,
         &req,
-        (),
+        WebhookRequestPayload {
+            connector: connector_id.clone(),
+        },
         |state, auth, _, req_state| {
             webhooks::incoming_webhooks_wrapper::<W>(
-                &flow,
                 state.to_owned(),
                 req_state,
                 &req,
-                auth.merchant_account,
+                auth.platform,
                 auth.profile,
-                auth.key_store,
                 &connector_id,
                 body.clone(),
                 false,
@@ -166,6 +167,34 @@ pub async fn receive_incoming_webhook<W: types::OutgoingWebhookType>(
             merchant_id,
             profile_id,
         },
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(feature = "v1")]
+#[instrument(skip_all, fields(flow = ?Flow::IncomingNetworkTokenWebhookReceive))]
+pub async fn receive_network_token_requestor_incoming_webhook<W: types::OutgoingWebhookType>(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    body: web::Bytes,
+    _path: web::Path<String>,
+) -> impl Responder {
+    let flow = Flow::IncomingNetworkTokenWebhookReceive;
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        (),
+        |state, _: (), _, _| {
+            webhooks::network_token_incoming_webhooks_wrapper::<W>(
+                state.to_owned(),
+                &req,
+                body.clone(),
+            )
+        },
+        &auth::NoAuth,
         api_locking::LockAction::NotApplicable,
     ))
     .await

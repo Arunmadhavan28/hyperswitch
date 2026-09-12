@@ -1,202 +1,31 @@
 use std::time::Duration;
 
-use base64::Engine;
+use common_utils::errors::ReportSwitchExt;
 use error_stack::ResultExt;
+pub use external_services::http_client::{self, client};
 use http::{HeaderValue, Method};
-use masking::{ExposeInterface, PeekInterface};
-use once_cell::sync::OnceCell;
+pub use hyperswitch_interfaces::{
+    api_client::{ApiClient, ApiClientWrapper, RequestBuilder},
+    types::Proxy,
+};
+use hyperswitch_masking::PeekInterface;
 use reqwest::multipart::Form;
-use router_env::tracing_actix_web::RequestId;
+use router_env::RequestId;
 
 use super::{request::Maskable, Request};
-use crate::{
-    configs::settings::Proxy,
-    consts::BASE64_ENGINE,
-    core::errors::{ApiClientError, CustomResult},
-    routes::SessionState,
-};
-
-static DEFAULT_CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
-
-fn get_client_builder(
-    proxy_config: &Proxy,
-) -> CustomResult<reqwest::ClientBuilder, ApiClientError> {
-    let mut client_builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .pool_idle_timeout(Duration::from_secs(
-            proxy_config
-                .idle_pool_connection_timeout
-                .unwrap_or_default(),
-        ));
-
-    let proxy_exclusion_config =
-        reqwest::NoProxy::from_string(&proxy_config.bypass_proxy_hosts.clone().unwrap_or_default());
-
-    // Proxy all HTTPS traffic through the configured HTTPS proxy
-    if let Some(url) = proxy_config.https_url.as_ref() {
-        client_builder = client_builder.proxy(
-            reqwest::Proxy::https(url)
-                .change_context(ApiClientError::InvalidProxyConfiguration)
-                .attach_printable("HTTPS proxy configuration error")?
-                .no_proxy(proxy_exclusion_config.clone()),
-        );
-    }
-
-    // Proxy all HTTP traffic through the configured HTTP proxy
-    if let Some(url) = proxy_config.http_url.as_ref() {
-        client_builder = client_builder.proxy(
-            reqwest::Proxy::http(url)
-                .change_context(ApiClientError::InvalidProxyConfiguration)
-                .attach_printable("HTTP proxy configuration error")?
-                .no_proxy(proxy_exclusion_config),
-        );
-    }
-
-    Ok(client_builder)
-}
-
-fn get_base_client(proxy_config: &Proxy) -> CustomResult<reqwest::Client, ApiClientError> {
-    Ok(DEFAULT_CLIENT
-        .get_or_try_init(|| {
-            get_client_builder(proxy_config)?
-                .build()
-                .change_context(ApiClientError::ClientConstructionFailed)
-                .attach_printable("Failed to construct base client")
-        })?
-        .clone())
-}
-
-// We may need to use outbound proxy to connect to external world.
-// Precedence will be the environment variables, followed by the config.
-pub fn create_client(
-    proxy_config: &Proxy,
-    client_certificate: Option<masking::Secret<String>>,
-    client_certificate_key: Option<masking::Secret<String>>,
-) -> CustomResult<reqwest::Client, ApiClientError> {
-    match (client_certificate, client_certificate_key) {
-        (Some(encoded_certificate), Some(encoded_certificate_key)) => {
-            let client_builder = get_client_builder(proxy_config)?;
-
-            let identity = create_identity_from_certificate_and_key(
-                encoded_certificate.clone(),
-                encoded_certificate_key,
-            )?;
-            let certificate_list = create_certificate(encoded_certificate)?;
-            let client_builder = certificate_list
-                .into_iter()
-                .fold(client_builder, |client_builder, certificate| {
-                    client_builder.add_root_certificate(certificate)
-                });
-            client_builder
-                .identity(identity)
-                .use_rustls_tls()
-                .build()
-                .change_context(ApiClientError::ClientConstructionFailed)
-                .attach_printable("Failed to construct client with certificate and certificate key")
-        }
-        _ => get_base_client(proxy_config),
-    }
-}
-
-pub fn create_identity_from_certificate_and_key(
-    encoded_certificate: masking::Secret<String>,
-    encoded_certificate_key: masking::Secret<String>,
-) -> Result<reqwest::Identity, error_stack::Report<ApiClientError>> {
-    let decoded_certificate = BASE64_ENGINE
-        .decode(encoded_certificate.expose())
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-
-    let decoded_certificate_key = BASE64_ENGINE
-        .decode(encoded_certificate_key.expose())
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-
-    let certificate = String::from_utf8(decoded_certificate)
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-
-    let certificate_key = String::from_utf8(decoded_certificate_key)
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-
-    let key_chain = format!("{}{}", certificate_key, certificate);
-    reqwest::Identity::from_pem(key_chain.as_bytes())
-        .change_context(ApiClientError::CertificateDecodeFailed)
-}
-
-pub fn create_certificate(
-    encoded_certificate: masking::Secret<String>,
-) -> Result<Vec<reqwest::Certificate>, error_stack::Report<ApiClientError>> {
-    let decoded_certificate = BASE64_ENGINE
-        .decode(encoded_certificate.expose())
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-
-    let certificate = String::from_utf8(decoded_certificate)
-        .change_context(ApiClientError::CertificateDecodeFailed)?;
-    reqwest::Certificate::from_pem_bundle(certificate.as_bytes())
-        .change_context(ApiClientError::CertificateDecodeFailed)
-}
-
-pub trait RequestBuilder: Send + Sync {
-    fn json(&mut self, body: serde_json::Value);
-    fn url_encoded_form(&mut self, body: serde_json::Value);
-    fn timeout(&mut self, timeout: Duration);
-    fn multipart(&mut self, form: Form);
-    fn header(&mut self, key: String, value: Maskable<String>) -> CustomResult<(), ApiClientError>;
-    fn send(
-        self,
-    ) -> CustomResult<
-        Box<
-            (dyn core::future::Future<Output = Result<reqwest::Response, reqwest::Error>>
-                 + 'static),
-        >,
-        ApiClientError,
-    >;
-}
-
-#[async_trait::async_trait]
-pub trait ApiClient: dyn_clone::DynClone
-where
-    Self: Send + Sync,
-{
-    fn request(
-        &self,
-        method: Method,
-        url: String,
-    ) -> CustomResult<Box<dyn RequestBuilder>, ApiClientError>;
-
-    fn request_with_certificate(
-        &self,
-        method: Method,
-        url: String,
-        certificate: Option<masking::Secret<String>>,
-        certificate_key: Option<masking::Secret<String>>,
-    ) -> CustomResult<Box<dyn RequestBuilder>, ApiClientError>;
-
-    async fn send_request(
-        &self,
-        state: &SessionState,
-        request: Request,
-        option_timeout_secs: Option<u64>,
-        forward_to_kafka: bool,
-    ) -> CustomResult<reqwest::Response, ApiClientError>;
-
-    fn add_request_id(&mut self, request_id: RequestId);
-
-    fn get_request_id(&self) -> Option<String>;
-
-    fn add_flow_name(&mut self, flow_name: String);
-}
-
-dyn_clone::clone_trait_object!(ApiClient);
+use crate::core::errors::{ApiClientError, CustomResult};
 
 #[derive(Clone)]
 pub struct ProxyClient {
     proxy_config: Proxy,
     client: reqwest::Client,
-    request_id: Option<String>,
+    request_id: Option<RequestId>,
 }
 
 impl ProxyClient {
     pub fn new(proxy_config: &Proxy) -> CustomResult<Self, ApiClientError> {
-        let client = get_client_builder(proxy_config)?
+        let client = client::get_client_builder(proxy_config)
+            .switch()?
             .build()
             .change_context(ApiClientError::InvalidProxyConfiguration)?;
         Ok(Self {
@@ -208,14 +37,15 @@ impl ProxyClient {
 
     pub fn get_reqwest_client(
         &self,
-        client_certificate: Option<masking::Secret<String>>,
-        client_certificate_key: Option<masking::Secret<String>>,
+        client_certificate: Option<hyperswitch_masking::Secret<String>>,
+        client_certificate_key: Option<hyperswitch_masking::Secret<String>>,
     ) -> CustomResult<reqwest::Client, ApiClientError> {
         match (client_certificate, client_certificate_key) {
             (Some(certificate), Some(certificate_key)) => {
-                let client_builder = get_client_builder(&self.proxy_config)?;
+                let client_builder = client::get_client_builder(&self.proxy_config).switch()?;
                 let identity =
-                    create_identity_from_certificate_and_key(certificate, certificate_key)?;
+                    client::create_identity_from_certificate_and_key(certificate, certificate_key)
+                        .switch()?;
                 Ok(client_builder
                     .identity(identity)
                     .build()
@@ -271,10 +101,7 @@ impl RequestBuilder for RouterRequestBuilder {
     fn send(
         self,
     ) -> CustomResult<
-        Box<
-            (dyn core::future::Future<Output = Result<reqwest::Response, reqwest::Error>>
-                 + 'static),
-        >,
+        Box<dyn core::future::Future<Output = Result<reqwest::Response, reqwest::Error>> + 'static>,
         ApiClientError,
     > {
         Ok(Box::new(
@@ -297,8 +124,8 @@ impl ApiClient for ProxyClient {
         &self,
         method: Method,
         url: String,
-        certificate: Option<masking::Secret<String>>,
-        certificate_key: Option<masking::Secret<String>>,
+        certificate: Option<hyperswitch_masking::Secret<String>>,
+        certificate_key: Option<hyperswitch_masking::Secret<String>>,
     ) -> CustomResult<Box<dyn RequestBuilder>, ApiClientError> {
         let client_builder = self
             .get_reqwest_client(certificate, certificate_key)
@@ -309,21 +136,26 @@ impl ApiClient for ProxyClient {
     }
     async fn send_request(
         &self,
-        state: &SessionState,
+        api_client: &dyn ApiClientWrapper,
         request: Request,
         option_timeout_secs: Option<u64>,
         _forward_to_kafka: bool,
     ) -> CustomResult<reqwest::Response, ApiClientError> {
-        crate::services::send_request(state, request, option_timeout_secs).await
+        http_client::send_request(&api_client.get_proxy(), request, option_timeout_secs)
+            .await
+            .switch()
     }
 
     fn add_request_id(&mut self, request_id: RequestId) {
-        self.request_id
-            .replace(request_id.as_hyphenated().to_string());
+        self.request_id = Some(request_id);
     }
 
-    fn get_request_id(&self) -> Option<String> {
+    fn get_request_id(&self) -> Option<RequestId> {
         self.request_id.clone()
+    }
+
+    fn get_request_id_str(&self) -> Option<String> {
+        self.request_id.as_ref().map(|id| id.to_string())
     }
 
     fn add_flow_name(&mut self, _flow_name: String) {}
@@ -348,8 +180,8 @@ impl ApiClient for MockApiClient {
         &self,
         _method: Method,
         _url: String,
-        _certificate: Option<masking::Secret<String>>,
-        _certificate_key: Option<masking::Secret<String>>,
+        _certificate: Option<hyperswitch_masking::Secret<String>>,
+        _certificate_key: Option<hyperswitch_masking::Secret<String>>,
     ) -> CustomResult<Box<dyn RequestBuilder>, ApiClientError> {
         // [#2066]: Add Mock implementation for ApiClient
         Err(ApiClientError::UnexpectedState.into())
@@ -357,7 +189,7 @@ impl ApiClient for MockApiClient {
 
     async fn send_request(
         &self,
-        _state: &SessionState,
+        _state: &dyn ApiClientWrapper,
         _request: Request,
         _option_timeout_secs: Option<u64>,
         _forward_to_kafka: bool,
@@ -370,7 +202,12 @@ impl ApiClient for MockApiClient {
         // [#2066]: Add Mock implementation for ApiClient
     }
 
-    fn get_request_id(&self) -> Option<String> {
+    fn get_request_id(&self) -> Option<RequestId> {
+        // [#2066]: Add Mock implementation for ApiClient
+        None
+    }
+
+    fn get_request_id_str(&self) -> Option<String> {
         // [#2066]: Add Mock implementation for ApiClient
         None
     }

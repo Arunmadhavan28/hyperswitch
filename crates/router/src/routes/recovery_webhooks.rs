@@ -8,6 +8,7 @@ use crate::{
         webhooks::{self, types},
     },
     services::{api, authentication as auth},
+    types::domain,
 };
 
 #[instrument(skip_all, fields(flow = ?Flow::IncomingWebhookReceive))]
@@ -25,19 +26,17 @@ pub async fn recovery_receive_incoming_webhook<W: types::OutgoingWebhookType>(
     let (merchant_id, profile_id, connector_id) = path.into_inner();
 
     Box::pin(api::server_wrap(
-        flow.clone(),
+        flow,
         state,
         &req,
         (),
         |state, auth, _, req_state| {
             webhooks::incoming_webhooks_wrapper::<W>(
-                &flow,
                 state.to_owned(),
                 req_state,
                 &req,
-                auth.merchant_account,
+                auth.platform,
                 auth.profile,
-                auth.key_store,
                 &connector_id,
                 body.clone(),
                 false,

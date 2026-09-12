@@ -16,6 +16,8 @@ impl From<enums::CardType> for global_enums::PaymentMethodType {
         match value {
             enums::CardType::Credit => Self::Credit,
             enums::CardType::Debit => Self::Debit,
+            #[cfg(feature = "v2")]
+            enums::CardType::Card => Self::Card,
         }
     }
 }
@@ -26,10 +28,13 @@ impl From<enums::PayLaterType> for global_enums::PaymentMethodType {
             enums::PayLaterType::Affirm => Self::Affirm,
             enums::PayLaterType::AfterpayClearpay => Self::AfterpayClearpay,
             enums::PayLaterType::Alma => Self::Alma,
+            enums::PayLaterType::Flexiti => Self::Flexiti,
             enums::PayLaterType::Klarna => Self::Klarna,
             enums::PayLaterType::PayBright => Self::PayBright,
             enums::PayLaterType::Walley => Self::Walley,
             enums::PayLaterType::Atome => Self::Atome,
+            enums::PayLaterType::Breadpay => Self::Breadpay,
+            enums::PayLaterType::Payjustnow => Self::Payjustnow,
         }
     }
 }
@@ -37,8 +42,12 @@ impl From<enums::PayLaterType> for global_enums::PaymentMethodType {
 impl From<enums::WalletType> for global_enums::PaymentMethodType {
     fn from(value: enums::WalletType) -> Self {
         match value {
+            enums::WalletType::Bluecode => Self::Bluecode,
             enums::WalletType::GooglePay => Self::GooglePay,
             enums::WalletType::AmazonPay => Self::AmazonPay,
+            enums::WalletType::Skrill => Self::Skrill,
+            enums::WalletType::Neteller => Self::Neteller,
+            enums::WalletType::Paysera => Self::Paysera,
             enums::WalletType::ApplePay => Self::ApplePay,
             enums::WalletType::Paypal => Self::Paypal,
             enums::WalletType::AliPay => Self::AliPay,
@@ -60,6 +69,7 @@ impl From<enums::WalletType> for global_enums::PaymentMethodType {
             enums::WalletType::Venmo => Self::Venmo,
             enums::WalletType::Mifinity => Self::Mifinity,
             enums::WalletType::Paze => Self::Paze,
+            enums::WalletType::RevolutPay => Self::RevolutPay,
         }
     }
 }
@@ -68,7 +78,9 @@ impl From<enums::BankDebitType> for global_enums::PaymentMethodType {
     fn from(value: enums::BankDebitType) -> Self {
         match value {
             enums::BankDebitType::Ach => Self::Ach,
+            enums::BankDebitType::EftDebitOrder => Self::EftDebitOrder,
             enums::BankDebitType::Sepa => Self::Sepa,
+            enums::BankDebitType::SepaGuarenteedDebit => Self::SepaGuarenteedDebit,
             enums::BankDebitType::Bacs => Self::Bacs,
             enums::BankDebitType::Becs => Self::Becs,
         }
@@ -79,6 +91,7 @@ impl From<enums::UpiType> for global_enums::PaymentMethodType {
         match value {
             enums::UpiType::UpiCollect => Self::UpiCollect,
             enums::UpiType::UpiIntent => Self::UpiIntent,
+            enums::UpiType::UpiQr => Self::UpiQr,
         }
     }
 }
@@ -109,9 +122,16 @@ impl From<enums::BankTransferType> for global_enums::PaymentMethodType {
         match value {
             enums::BankTransferType::Multibanco => Self::Multibanco,
             enums::BankTransferType::Pix => Self::Pix,
+            enums::BankTransferType::PixKey => Self::PixKey,
+            enums::BankTransferType::PixEmv => Self::PixEmv,
+            enums::BankTransferType::PixQr => Self::PixQr,
+            enums::BankTransferType::PixAutomaticoPush => Self::PixAutomaticoPush,
+            enums::BankTransferType::PixAutomaticoQr => Self::PixAutomaticoQr,
+            enums::BankTransferType::Payshap => Self::Payshap,
+            enums::BankTransferType::PayshapProxy => Self::PayshapProxy,
             enums::BankTransferType::Pse => Self::Pse,
             enums::BankTransferType::Ach => Self::Ach,
-            enums::BankTransferType::Sepa => Self::Sepa,
+            enums::BankTransferType::SepaBankTransfer => Self::Sepa,
             enums::BankTransferType::Bacs => Self::Bacs,
             enums::BankTransferType::BcaBankTransfer => Self::BcaBankTransfer,
             enums::BankTransferType::BniVa => Self::BniVa,
@@ -121,6 +141,10 @@ impl From<enums::BankTransferType> for global_enums::PaymentMethodType {
             enums::BankTransferType::MandiriVa => Self::MandiriVa,
             enums::BankTransferType::PermataBankTransfer => Self::PermataBankTransfer,
             enums::BankTransferType::LocalBankTransfer => Self::LocalBankTransfer,
+            enums::BankTransferType::InstantBankTransfer => Self::InstantBankTransfer,
+            enums::BankTransferType::InstantBankTransferFinland => Self::InstantBankTransferFinland,
+            enums::BankTransferType::InstantBankTransferPoland => Self::InstantBankTransferPoland,
+            enums::BankTransferType::IndonesianBankTransfer => Self::IndonesianBankTransfer,
         }
     }
 }
@@ -130,6 +154,7 @@ impl From<enums::GiftCardType> for global_enums::PaymentMethodType {
         match value {
             enums::GiftCardType::PaySafeCard => Self::PaySafeCard,
             enums::GiftCardType::Givex => Self::Givex,
+            enums::GiftCardType::BhnCardNetwork => Self::BhnCardNetwork,
         }
     }
 }
@@ -149,6 +174,14 @@ impl From<enums::MobilePaymentType> for global_enums::PaymentMethodType {
     fn from(value: enums::MobilePaymentType) -> Self {
         match value {
             enums::MobilePaymentType::DirectCarrierBilling => Self::DirectCarrierBilling,
+        }
+    }
+}
+
+impl From<enums::NetworkTokenType> for global_enums::PaymentMethodType {
+    fn from(value: enums::NetworkTokenType) -> Self {
+        match value {
+            enums::NetworkTokenType::NetworkToken => Self::NetworkToken,
         }
     }
 }
@@ -175,6 +208,7 @@ impl From<enums::BankRedirectType> for global_enums::PaymentMethodType {
             enums::BankRedirectType::OpenBankingUk => Self::OpenBankingUk,
             enums::BankRedirectType::Przelewy24 => Self::Przelewy24,
             enums::BankRedirectType::Trustly => Self::Trustly,
+            enums::BankRedirectType::OpenBanking => Self::OpenBanking,
         }
     }
 }
@@ -211,6 +245,7 @@ impl From<enums::RealTimePaymentType> for global_enums::PaymentMethodType {
             enums::RealTimePaymentType::DuitNow => Self::DuitNow,
             enums::RealTimePaymentType::PromptPay => Self::PromptPay,
             enums::RealTimePaymentType::VietQr => Self::VietQr,
+            enums::RealTimePaymentType::Qris => Self::Qris,
         }
     }
 }
@@ -228,6 +263,7 @@ fn lower_value(dir_value: dir::DirValue) -> Result<EuclidValue, AnalysisErrorTyp
     Ok(match dir_value {
         dir::DirValue::PaymentMethod(pm) => EuclidValue::PaymentMethod(pm),
         dir::DirValue::CardBin(ci) => EuclidValue::CardBin(ci),
+        dir::DirValue::ExtendedCardBin(ecb) => EuclidValue::ExtendedCardBin(ecb),
         dir::DirValue::CardType(ct) => EuclidValue::PaymentMethodType(ct.into()),
         dir::DirValue::CardNetwork(cn) => EuclidValue::CardNetwork(cn),
         dir::DirValue::MetaData(md) => EuclidValue::Metadata(md),
@@ -244,6 +280,7 @@ fn lower_value(dir_value: dir::DirValue) -> Result<EuclidValue, AnalysisErrorTyp
         dir::DirValue::AuthenticationType(at) => EuclidValue::AuthenticationType(at),
         dir::DirValue::CaptureMethod(cm) => EuclidValue::CaptureMethod(cm),
         dir::DirValue::PaymentAmount(pa) => EuclidValue::PaymentAmount(pa),
+        dir::DirValue::SurchargeAmount(sa) => EuclidValue::SurchargeAmount(sa),
         dir::DirValue::PaymentCurrency(pc) => EuclidValue::PaymentCurrency(pc),
         dir::DirValue::BusinessCountry(buc) => EuclidValue::BusinessCountry(buc),
         dir::DirValue::BillingCountry(bic) => EuclidValue::BillingCountry(bic),
@@ -259,6 +296,22 @@ fn lower_value(dir_value: dir::DirValue) -> Result<EuclidValue, AnalysisErrorTyp
         dir::DirValue::SetupFutureUsage(sfu) => EuclidValue::SetupFutureUsage(sfu),
         dir::DirValue::OpenBankingType(ob) => EuclidValue::PaymentMethodType(ob.into()),
         dir::DirValue::MobilePaymentType(mp) => EuclidValue::PaymentMethodType(mp.into()),
+        dir::DirValue::IssuerName(str_value) => EuclidValue::IssuerName(str_value),
+        dir::DirValue::IssuerCountry(country) => EuclidValue::IssuerCountry(country),
+        dir::DirValue::CustomerDevicePlatform(customer_device_platform) => {
+            EuclidValue::CustomerDevicePlatform(customer_device_platform)
+        }
+        dir::DirValue::CustomerDeviceType(customer_device_type) => {
+            EuclidValue::CustomerDeviceType(customer_device_type)
+        }
+        dir::DirValue::CustomerDeviceDisplaySize(customer_device_display_size) => {
+            EuclidValue::CustomerDeviceDisplaySize(customer_device_display_size)
+        }
+        dir::DirValue::AcquirerCountry(country) => EuclidValue::AcquirerCountry(country),
+        dir::DirValue::AcquirerFraudRate(num_value) => EuclidValue::AcquirerFraudRate(num_value),
+        dir::DirValue::TransactionInitiator(ti) => EuclidValue::TransactionInitiator(ti),
+        dir::DirValue::NetworkTokenType(nt) => EuclidValue::PaymentMethodType(nt.into()),
+        dir::DirValue::CardDiscovery(cd) => EuclidValue::CardDiscovery(cd),
     })
 }
 

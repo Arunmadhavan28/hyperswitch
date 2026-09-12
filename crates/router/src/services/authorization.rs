@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use common_utils::id_type;
 use error_stack::ResultExt;
-use redis_interface::RedisConnectionPool;
+use redis_interface::RedisConnectionWithContext;
 use router_env::logger;
 
 use super::authentication::AuthToken;
@@ -61,12 +59,14 @@ async fn get_role_info_from_cache<A>(state: &A, role_id: &str) -> RouterResult<r
 where
     A: SessionStateInfo + Sync,
 {
-    let redis_conn = get_redis_connection(state)?;
+    let redis_conn = get_redis_connection_for_global_tenant(state)?;
 
     redis_conn
         .get_and_deserialize_key(&get_cache_key_from_role_id(role_id).into(), "RoleInfo")
         .await
-        .change_context(ApiErrorResponse::InternalServerError)
+        .change_context(ApiErrorResponse::GenericNotFoundError {
+            message: "Role info not found in cache".to_string(),
+        })
 }
 
 pub fn get_cache_key_from_role_id(role_id: &str) -> String {
@@ -100,7 +100,7 @@ pub async fn set_role_info_in_cache<A>(
 where
     A: SessionStateInfo + Sync,
 {
-    let redis_conn = get_redis_connection(state)?;
+    let redis_conn = get_redis_connection_for_global_tenant(state)?;
 
     redis_conn
         .serialize_and_set_key_with_expiry(
@@ -143,9 +143,11 @@ pub fn check_tenant(
     Ok(())
 }
 
-fn get_redis_connection<A: SessionStateInfo>(state: &A) -> RouterResult<Arc<RedisConnectionPool>> {
+fn get_redis_connection_for_global_tenant<A: SessionStateInfo>(
+    state: &A,
+) -> RouterResult<RedisConnectionWithContext> {
     state
-        .store()
+        .global_store()
         .get_redis_conn()
         .change_context(ApiErrorResponse::InternalServerError)
         .attach_printable("Failed to get redis connection")

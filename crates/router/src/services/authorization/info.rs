@@ -1,61 +1,89 @@
+use std::ops::Not;
+
 use api_models::user_role::GroupInfo;
 use common_enums::{ParentGroup, PermissionGroup};
 use strum::IntoEnumIterator;
 
 // TODO: To be deprecated
-pub fn get_group_authorization_info() -> Vec<GroupInfo> {
-    PermissionGroup::iter()
-        .map(get_group_info_from_permission_group)
-        .collect()
+pub fn get_group_authorization_info() -> Option<Vec<GroupInfo>> {
+    let groups = PermissionGroup::iter()
+        .filter_map(get_group_info_from_permission_group)
+        .collect::<Vec<_>>();
+
+    groups.is_empty().not().then_some(groups)
 }
 
 // TODO: To be deprecated
-fn get_group_info_from_permission_group(group: PermissionGroup) -> GroupInfo {
-    let description = get_group_description(group);
-    GroupInfo { group, description }
+fn get_group_info_from_permission_group(group: PermissionGroup) -> Option<GroupInfo> {
+    let description = get_group_description(group)?;
+    Some(GroupInfo { group, description })
 }
 
 // TODO: To be deprecated
-fn get_group_description(group: PermissionGroup) -> &'static str {
+fn get_group_description(group: PermissionGroup) -> Option<&'static str> {
     match group {
         PermissionGroup::OperationsView => {
-            "View Payments, Refunds, Payouts, Mandates, Disputes and Customers"
+            Some("View Payments, Refunds, Payouts, Mandates, Disputes and Customers")
         }
         PermissionGroup::OperationsManage => {
-            "Create, modify and delete Payments, Refunds, Payouts, Mandates, Disputes and Customers"
+            Some("Create, modify and delete Payments, Refunds, Payouts, Mandates, Disputes and Customers")
         }
         PermissionGroup::ConnectorsView => {
-            "View connected Payment Processors, Payout Processors and Fraud & Risk Manager details"
+            Some("View connected Payment Processors, Payout Processors and Fraud & Risk Manager details")
         }
-        PermissionGroup::ConnectorsManage => "Create, modify and delete connectors like Payment Processors, Payout Processors and Fraud & Risk Manager",
+        PermissionGroup::ConnectorsManage => Some("Create, modify and delete connectors like Payment Processors, Payout Processors and Fraud & Risk Manager"),
         PermissionGroup::WorkflowsView => {
-            "View Routing, 3DS Decision Manager, Surcharge Decision Manager"
+            Some("View Routing, 3DS Decision Manager, Surcharge Decision Manager")
         }
         PermissionGroup::WorkflowsManage => {
-            "Create, modify and delete Routing, 3DS Decision Manager, Surcharge Decision Manager"
+            Some("Create, modify and delete Routing, 3DS Decision Manager, Surcharge Decision Manager")
         }
-        PermissionGroup::AnalyticsView => "View Analytics",
-        PermissionGroup::UsersView => "View Users",
-        PermissionGroup::UsersManage => "Manage and invite Users to the Team",
-        PermissionGroup::MerchantDetailsView | PermissionGroup::AccountView => "View Merchant Details",
-        PermissionGroup::MerchantDetailsManage | PermissionGroup::AccountManage => "Create, modify and delete Merchant Details like api keys, webhooks, etc",
-        PermissionGroup::OrganizationManage => "Manage organization level tasks like create new Merchant accounts, Organization level roles, etc",
-        PermissionGroup::ReconReportsView => "View reconciliation reports and analytics",
-        PermissionGroup::ReconReportsManage => "Manage reconciliation reports",
-        PermissionGroup::ReconOpsView => "View and access all reconciliation operations including reports and analytics",
-        PermissionGroup::ReconOpsManage => "Manage all reconciliation operations including reports and analytics",
+        PermissionGroup::AnalyticsView => Some("View Analytics"),
+        PermissionGroup::UsersView => Some("View Users"),
+        PermissionGroup::UsersManage => Some("Manage and invite Users to the Team"),
+        PermissionGroup::AccountView => Some("View Merchant Details"),
+        PermissionGroup::AccountManage => Some("Create, modify and delete Merchant Details like api keys, webhooks, etc"),
+        // Omits these from the authorization-info response; hidden until the role backfill
+        PermissionGroup::WebhooksView => None,
+        PermissionGroup::WebhooksManage => None,
+        PermissionGroup::ApiKeysView => None,
+        PermissionGroup::ApiKeysManage => None,
+        PermissionGroup::ThemeView => Some("View Themes"),
+        PermissionGroup::ThemeManage => Some("Manage Themes"),
+        PermissionGroup::ConfigurationsView => Some("View Configurations"),
+        PermissionGroup::ConfigurationsManage => Some("Create, modify and delete Configurations"),
+        PermissionGroup::CloneConnectorManage => None, // Admin-only, no user-facing description
+        PermissionGroup::ReconSourcesView => Some("View recon ingestion and transformation configs and files"),
+        PermissionGroup::ReconSourcesManage => Some("Create and edit recon ingestion and transformation configs and download files"),
+        PermissionGroup::ReconExceptionsView => Some("Investigate Exceptions and view resolutions"),
+        PermissionGroup::ReconExceptionsManage => Some("Investigate and resolve recon exceptions"),
+        PermissionGroup::ReconTransactionsView => Some("View recon staging entries and transactions"),
+        PermissionGroup::ReconTransactionsManage => Some("View and edit recon staging entries and transactions"),
+        PermissionGroup::ReconRulesView => Some("View reconciliation rules"),
+        PermissionGroup::ReconRulesManage => Some("Create and edit reconciliation rules"),
+        PermissionGroup::OffersView => Some("View Offers"),
+        PermissionGroup::OffersManage => Some("Create, modify and delete Offers"),
     }
 }
 
-pub fn get_parent_group_description(group: ParentGroup) -> &'static str {
+pub fn get_parent_group_description(group: ParentGroup) -> Option<&'static str> {
     match group {
-        ParentGroup::Operations => "Payments, Refunds, Payouts, Mandates, Disputes and Customers",
-        ParentGroup::Connectors => "Create, modify and delete connectors like Payment Processors, Payout Processors and Fraud & Risk Manager",
-        ParentGroup::Workflows => "Create, modify and delete Routing, 3DS Decision Manager, Surcharge Decision Manager",
-        ParentGroup::Analytics => "View Analytics",
-        ParentGroup::Users =>  "Manage and invite Users to the Team",
-        ParentGroup::Account => "Create, modify and delete Merchant Details like api keys, webhooks, etc",
-        ParentGroup::ReconOps => "View, manage reconciliation operations like upload and process files, run reconciliation etc",
-        ParentGroup::ReconReports => "View, manage reconciliation reports and analytics",
+        ParentGroup::Operations => Some("Payments, Refunds, Payouts, Mandates, Disputes and Customers"),
+        ParentGroup::Connectors => Some("Create, modify and delete connectors like Payment Processors, Payout Processors and Fraud & Risk Manager"),
+        ParentGroup::Workflows => Some("Create, modify and delete Routing, 3DS Decision Manager, Surcharge Decision Manager"),
+        ParentGroup::Analytics => Some("View Analytics"),
+        ParentGroup::Users =>  Some("Manage and invite Users to the Team"),
+        ParentGroup::Account => Some("Create, modify and delete Merchant Details like api keys, webhooks, etc"),
+        // Omits these from the authorization-info response; hidden until the role backfill
+        ParentGroup::Webhook => None,
+        ParentGroup::ApiKeys => None,
+        ParentGroup::Theme => Some("Manage and view themes for the organization"),
+        ParentGroup::Configurations => Some("Manage and view configurations"),
+        ParentGroup::CloneConnector => None, // Admin-only, no user-facing description
+        ParentGroup::ReconSources => Some("Recon ingestion and transformation pipelines"),
+        ParentGroup::ReconExceptions => Some("Recon exception investigation and resolution"),
+        ParentGroup::ReconTransactions => Some("Recon staging entries and transactions"),
+        ParentGroup::ReconRules => Some("Reconciliation rules"),
+        ParentGroup::Offers => Some("Manage and view offers"),
     }
 }

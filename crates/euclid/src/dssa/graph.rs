@@ -42,6 +42,7 @@ impl cgraph::NodeViz for dir::DirValue {
         match self {
             Self::PaymentMethod(pm) => pm.to_string(),
             Self::CardBin(bin) => bin.value.clone(),
+            Self::ExtendedCardBin(ebin) => ebin.value.clone(),
             Self::CardType(ct) => ct.to_string(),
             Self::CardNetwork(cn) => cn.to_string(),
             Self::PayLaterType(plt) => plt.to_string(),
@@ -53,6 +54,7 @@ impl cgraph::NodeViz for dir::DirValue {
             Self::CryptoType(ct) => ct.to_string(),
             Self::RewardType(rt) => rt.to_string(),
             Self::PaymentAmount(amt) => amt.number.to_string(),
+            Self::SurchargeAmount(amt) => amt.number.to_string(),
             Self::PaymentCurrency(curr) => curr.to_string(),
             Self::AuthenticationType(at) => at.to_string(),
             Self::CaptureMethod(cm) => cm.to_string(),
@@ -71,6 +73,20 @@ impl cgraph::NodeViz for dir::DirValue {
             Self::RealTimePaymentType(rtpt) => rtpt.to_string(),
             Self::OpenBankingType(ob) => ob.to_string(),
             Self::MobilePaymentType(mpt) => mpt.to_string(),
+            Self::IssuerName(issuer_name) => issuer_name.value.clone(),
+            Self::IssuerCountry(issuer_country) => issuer_country.to_string(),
+            Self::CustomerDevicePlatform(customer_device_platform) => {
+                customer_device_platform.to_string()
+            }
+            Self::CustomerDeviceType(customer_device_type) => customer_device_type.to_string(),
+            Self::CustomerDeviceDisplaySize(customer_device_display_size) => {
+                customer_device_display_size.to_string()
+            }
+            Self::AcquirerCountry(acquirer_country) => acquirer_country.to_string(),
+            Self::AcquirerFraudRate(acquirer_fraud_rate) => acquirer_fraud_rate.number.to_string(),
+            Self::TransactionInitiator(transaction_initiator) => transaction_initiator.to_string(),
+            Self::NetworkTokenType(ntt) => ntt.to_string(),
+            Self::CardDiscovery(card_discovery) => card_discovery.to_string(),
         }
     }
 }
@@ -498,8 +514,6 @@ impl CgraphExt for cgraph::ConstraintGraph<dir::DirValue> {
 
 #[cfg(test)]
 mod test {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
     use std::ops::Deref;
 
     use euclid_macros::knowledge;

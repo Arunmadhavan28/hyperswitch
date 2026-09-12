@@ -21,7 +21,7 @@ use hyperswitch_interfaces::{
     consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     errors,
 };
-use masking::{Secret, SwitchStrategy};
+use hyperswitch_masking::{Secret, SwitchStrategy};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -150,7 +150,7 @@ impl
                     }),
                     None,
                 ),
-                UpiData::UpiIntent(_) => (
+                UpiData::UpiIntent(_) | UpiData::UpiQr(_) => (
                     common_enums::CountryAlpha2::IN,
                     None,
                     Some(PreferredCheckoutMethod::Qr),
@@ -177,7 +177,8 @@ impl
                 | BankRedirectData::Sofort { .. }
                 | BankRedirectData::Trustly { .. }
                 | BankRedirectData::OnlineBankingFpx { .. }
-                | BankRedirectData::OnlineBankingThailand { .. } => {
+                | BankRedirectData::OnlineBankingThailand { .. }
+                | BankRedirectData::OpenBanking { .. } => {
                     Err(errors::ConnectorError::NotImplemented(
                         get_unimplemented_payment_method_error_message("iatapay"),
                     ))?
@@ -193,6 +194,9 @@ impl
                         (common_enums::CountryAlpha2::TH, None, None)
                     }
                     RealTimePaymentData::VietQr {} => (common_enums::CountryAlpha2::VN, None, None),
+                    RealTimePaymentData::Qris {} => Err(errors::ConnectorError::NotImplemented(
+                        get_unimplemented_payment_method_error_message("iatapay"),
+                    ))?,
                 }
             }
             PaymentMethodData::Card(_)
@@ -210,7 +214,12 @@ impl
             | PaymentMethodData::CardToken(_)
             | PaymentMethodData::OpenBanking(_)
             | PaymentMethodData::NetworkToken(_)
-            | PaymentMethodData::CardDetailsForNetworkTransactionId(_) => {
+            | PaymentMethodData::CardDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::CardWithOptionalCVC(_)
+            | PaymentMethodData::CardWithNetworkTokenDetails(_)
+            | PaymentMethodData::CardWithLimitedDetails(_)
+            | PaymentMethodData::DecryptedWalletTokenDetailsForNetworkTransactionId(_)
+            | PaymentMethodData::NetworkTokenDetailsForNetworkTransactionId(_) => {
                 Err(errors::ConnectorError::NotImplemented(
                     get_unimplemented_payment_method_error_message("iatapay"),
                 ))?
@@ -223,7 +232,7 @@ impl
             amount: item.amount,
             currency: item.router_data.request.currency,
             country,
-            locale: format!("en-{}", country),
+            locale: format!("en-{country}"),
             redirect_urls: get_redirect_url(return_url),
             payer_info,
             notification_url: item.router_data.request.get_webhook_url()?,
@@ -343,8 +352,11 @@ fn get_iatpay_response(
             status_code,
             attempt_status: Some(status),
             connector_transaction_id: response.iata_payment_id.clone(),
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     } else {
         None
@@ -390,9 +402,12 @@ fn get_iatpay_response(
                 mandate_reference: Box::new(None),
                 connector_metadata,
                 network_txn_id: None,
+                network_txn_link_id: None,
                 connector_response_reference_id: connector_response_reference_id.clone(),
                 incremental_authorization_allowed: None,
+                authentication_data: None,
                 charges: None,
+                payment_account_reference: None,
             }
         }
         None => PaymentsResponseData::TransactionResponse {
@@ -401,9 +416,12 @@ fn get_iatpay_response(
             mandate_reference: Box::new(None),
             connector_metadata: None,
             network_txn_id: None,
+            network_txn_link_id: None,
             connector_response_reference_id: connector_response_reference_id.clone(),
             incremental_authorization_allowed: None,
+            authentication_data: None,
             charges: None,
+            payment_account_reference: None,
         },
     };
 
@@ -421,7 +439,10 @@ impl<F, T> TryFrom<ResponseRouterData<F, IatapayPaymentsResponse, T, PaymentsRes
             get_iatpay_response(item.response, item.http_code)?;
         Ok(Self {
             status,
-            response: error.map_or_else(|| Ok(payment_response_data), Err),
+            response: match error {
+                Some(err) => Err(err),
+                None => Ok(payment_response_data),
+            },
             ..item.data
         })
     }
@@ -529,8 +550,11 @@ impl TryFrom<RefundsResponseRouterData<Execute, RefundResponse>> for RefundsRout
                 status_code: item.http_code,
                 attempt_status: None,
                 connector_transaction_id: Some(item.response.iata_refund_id.clone()),
-                issuer_error_code: None,
-                issuer_error_message: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             })
         } else {
             Ok(RefundsResponseData {
@@ -567,8 +591,11 @@ impl TryFrom<RefundsResponseRouterData<RSync, RefundResponse>> for RefundsRouter
                 status_code: item.http_code,
                 attempt_status: None,
                 connector_transaction_id: Some(item.response.iata_refund_id.clone()),
-                issuer_error_code: None,
-                issuer_error_message: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
             })
         } else {
             Ok(RefundsResponseData {

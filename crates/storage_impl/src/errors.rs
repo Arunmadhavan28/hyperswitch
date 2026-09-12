@@ -1,12 +1,15 @@
+use std::borrow::Cow;
+
 pub use common_enums::{ApiClientError, ApplicationError, ApplicationResult};
-use common_utils::errors::ErrorSwitch;
-use hyperswitch_domain_models::errors::StorageError as DataStorageError;
 pub use redis_interface::errors::RedisError;
 
 use crate::store::errors::DatabaseError;
+pub type StorageResult<T> = error_stack::Result<T, StorageError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    #[error("Initialization Error")]
+    InitializationError,
     #[error("DatabaseError: {0:?}")]
     DatabaseError(error_stack::Report<DatabaseError>),
     #[error("ValueNotFound: {0}")]
@@ -36,73 +39,41 @@ pub enum StorageError {
     DecryptionError,
     #[error("RedisError: {0:?}")]
     RedisError(error_stack::Report<RedisError>),
-}
-
-impl ErrorSwitch<DataStorageError> for StorageError {
-    fn switch(&self) -> DataStorageError {
-        self.into()
-    }
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<DataStorageError> for &StorageError {
-    fn into(self) -> DataStorageError {
-        match self {
-            StorageError::DatabaseError(i) => match i.current_context() {
-                DatabaseError::DatabaseConnectionError => DataStorageError::DatabaseConnectionError,
-                // TODO: Update this error type to encompass & propagate the missing type (instead of generic `db value not found`)
-                DatabaseError::NotFound => {
-                    DataStorageError::ValueNotFound(String::from("db value not found"))
-                }
-                // TODO: Update this error type to encompass & propagate the duplicate type (instead of generic `db value not found`)
-                DatabaseError::UniqueViolation => DataStorageError::DuplicateValue {
-                    entity: "db entity",
-                    key: None,
-                },
-                err => DataStorageError::DatabaseError(error_stack::report!(*err)),
-            },
-            StorageError::ValueNotFound(i) => DataStorageError::ValueNotFound(i.clone()),
-            StorageError::DuplicateValue { entity, key } => DataStorageError::DuplicateValue {
-                entity,
-                key: key.clone(),
-            },
-            StorageError::DatabaseConnectionError => DataStorageError::DatabaseConnectionError,
-            StorageError::KVError => DataStorageError::KVError,
-            StorageError::SerializationFailed => DataStorageError::SerializationFailed,
-            StorageError::MockDbError => DataStorageError::MockDbError,
-            StorageError::KafkaError => DataStorageError::KafkaError,
-            StorageError::CustomerRedacted => DataStorageError::CustomerRedacted,
-            StorageError::DeserializationFailed => DataStorageError::DeserializationFailed,
-            StorageError::EncryptionError => DataStorageError::EncryptionError,
-            StorageError::DecryptionError => DataStorageError::DecryptionError,
-            StorageError::RedisError(i) => match i.current_context() {
-                // TODO: Update this error type to encompass & propagate the missing type (instead of generic `redis value not found`)
-                RedisError::NotFound => {
-                    DataStorageError::ValueNotFound("redis value not found".to_string())
-                }
-                RedisError::JsonSerializationFailed => DataStorageError::SerializationFailed,
-                RedisError::JsonDeserializationFailed => DataStorageError::DeserializationFailed,
-                i => DataStorageError::RedisError(format!("{:?}", i)),
-            },
-        }
-    }
+    #[error("InvalidDataFormat: {0}")]
+    InvalidDataFormat(String),
 }
 
 impl From<error_stack::Report<RedisError>> for StorageError {
     fn from(err: error_stack::Report<RedisError>) -> Self {
-        Self::RedisError(err)
+        match err.current_context() {
+            RedisError::NotFound => Self::ValueNotFound("redis value not found".to_string()),
+            RedisError::JsonSerializationFailed => Self::SerializationFailed,
+            RedisError::JsonDeserializationFailed => Self::DeserializationFailed,
+            _ => Self::RedisError(err),
+        }
     }
 }
 
 impl From<diesel::result::Error> for StorageError {
     fn from(err: diesel::result::Error) -> Self {
-        Self::from(error_stack::report!(DatabaseError::from(err)))
+        use common_utils::errors::ErrorSwitchFrom;
+
+        let database_error = DatabaseError::switch_from(&err);
+        Self::from(error_stack::report!(err).change_context(database_error))
     }
 }
 
 impl From<error_stack::Report<DatabaseError>> for StorageError {
     fn from(err: error_stack::Report<DatabaseError>) -> Self {
-        Self::DatabaseError(err)
+        match err.current_context() {
+            DatabaseError::DatabaseConnectionError => Self::DatabaseConnectionError,
+            DatabaseError::NotFound => Self::ValueNotFound(String::from("db value not found")),
+            DatabaseError::UniqueViolation => Self::DuplicateValue {
+                entity: "db entity",
+                key: None,
+            },
+            _ => Self::DatabaseError(err),
+        }
     }
 }
 
@@ -121,6 +92,7 @@ impl StorageError {
             Self::DatabaseError(err) => {
                 matches!(err.current_context(), DatabaseError::UniqueViolation,)
             }
+            Self::DuplicateValue { .. } => true,
             _ => false,
         }
     }
@@ -128,22 +100,22 @@ impl StorageError {
 
 pub trait RedisErrorExt {
     #[track_caller]
-    fn to_redis_failed_response(self, key: &str) -> error_stack::Report<DataStorageError>;
+    fn to_redis_failed_response(self, key: &str) -> error_stack::Report<StorageError>;
 }
 
 impl RedisErrorExt for error_stack::Report<RedisError> {
-    fn to_redis_failed_response(self, key: &str) -> error_stack::Report<DataStorageError> {
+    fn to_redis_failed_response(self, key: &str) -> error_stack::Report<StorageError> {
         match self.current_context() {
-            RedisError::NotFound => self.change_context(DataStorageError::ValueNotFound(format!(
+            RedisError::NotFound => self.change_context(StorageError::ValueNotFound(format!(
                 "Data does not exist for key {key}",
             ))),
             RedisError::SetNxFailed | RedisError::SetAddMembersFailed => {
-                self.change_context(DataStorageError::DuplicateValue {
+                self.change_context(StorageError::DuplicateValue {
                     entity: "redis",
                     key: Some(key.to_string()),
                 })
             }
-            _ => self.change_context(DataStorageError::KVError),
+            _ => self.change_context(StorageError::KVError),
         }
     }
 }
@@ -175,9 +147,9 @@ pub enum ConnectorError {
     #[error("Failed to handle connector response")]
     ResponseHandlingFailed,
     #[error("Missing required field: {field_name}")]
-    MissingRequiredField { field_name: &'static str },
+    MissingRequiredField { field_name: Cow<'static, str> },
     #[error("Missing required fields: {field_names:?}")]
-    MissingRequiredFields { field_names: Vec<&'static str> },
+    MissingRequiredFields { field_names: Vec<Cow<'static, str>> },
     #[error("Failed to obtain authentication type")]
     FailedToObtainAuthType,
     #[error("Failed to obtain certificate")]
@@ -196,6 +168,13 @@ pub enum ConnectorError {
     },
     #[error("{flow} flow not supported by {connector} connector")]
     FlowNotSupported { flow: String, connector: String },
+    #[error("Connector '{connector}' rejected field '{field_name}': length {received_length} exceeds maximum of {max_length}'")]
+    MaxFieldLengthViolated {
+        connector: String,
+        field_name: String,
+        max_length: usize,
+        received_length: usize,
+    },
     #[error("Capture method not supported")]
     CaptureMethodNotSupported,
     #[error("Missing connector transaction ID")]
@@ -225,9 +204,11 @@ pub enum ConnectorError {
     #[error("Date Formatting Failed")]
     DateFormattingFailed,
     #[error("Invalid Data format")]
-    InvalidDataFormat { field_name: &'static str },
+    InvalidDataFormat { field_name: Cow<'static, str> },
     #[error("Payment Method data / Payment Method Type / Payment Experience Mismatch ")]
     MismatchedPaymentData,
+    #[error("Field {fields} doesn't match with the ones used during mandate creation")]
+    MandatePaymentDataMismatch { fields: String },
     #[error("Failed to parse Wallet token")]
     InvalidWalletToken { wallet_name: String },
     #[error("Missing Connector Related Transaction ID")]
@@ -235,7 +216,7 @@ pub enum ConnectorError {
     #[error("File Validation failed")]
     FileValidationFailed { reason: String },
     #[error("Missing 3DS redirection payload: {field_name}")]
-    MissingConnectorRedirectionPayload { field_name: &'static str },
+    MissingConnectorRedirectionPayload { field_name: Cow<'static, str> },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -308,6 +289,25 @@ pub enum RecoveryError {
     ProcessTrackerFailure,
     #[error("The encountered task is invalid")]
     InvalidTask,
-    #[error("The Intended data was not found")]
+    #[error("The Process Tracker data was not found")]
     ValueNotFound,
+    #[error("Failed to update billing connector")]
+    RecordBackToBillingConnectorFailed,
+    #[error("Failed to fetch billing connector account id")]
+    BillingMerchantConnectorAccountIdNotFound,
+    #[error("Failed to generate payment sync data")]
+    PaymentsResponseGenerationFailed,
+    #[error("Outgoing Webhook Failed")]
+    RevenueRecoveryOutgoingWebhookFailed,
+}
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum HealthCheckDecisionEngineError {
+    #[error("Failed to establish Decision Engine connection")]
+    FailedToCallDecisionEngineService,
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum HealthCheckUnifiedConnectorServiceError {
+    #[error("Failed to establish Unified Connector Service connection")]
+    FailedToCallUnifiedConnectorService,
 }

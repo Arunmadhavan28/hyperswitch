@@ -1,9 +1,9 @@
+#[cfg(feature = "v1")]
 use std::str::FromStr;
 
-use api_models::{
-    admin as admin_api, enums as api_enums, payment_methods::RequestPaymentMethodTypes,
-    refunds::MinorUnit,
-};
+#[cfg(feature = "v1")]
+use api_models::payment_methods::RequestPaymentMethodTypes;
+use api_models::{admin as admin_api, enums as api_enums, refunds::MinorUnit};
 use euclid::{
     dirval,
     frontend::{ast, dir},
@@ -16,25 +16,34 @@ use crate::{error::KgraphError, transformers::IntoDirValue, types as kgraph_type
 
 pub const DOMAIN_IDENTIFIER: &str = "payment_methods_enabled_for_merchantconnectoraccount";
 
-#[cfg(feature = "v1")]
+// #[cfg(feature = "v1")]
 fn get_dir_value_payment_method(
     from: api_enums::PaymentMethodType,
 ) -> Result<dir::DirValue, KgraphError> {
     match from {
         api_enums::PaymentMethodType::AmazonPay => Ok(dirval!(WalletType = AmazonPay)),
+        api_enums::PaymentMethodType::Skrill => Ok(dirval!(WalletType = Skrill)),
+        api_enums::PaymentMethodType::Neteller => Ok(dirval!(WalletType = Neteller)),
+        api_enums::PaymentMethodType::Paysera => Ok(dirval!(WalletType = Paysera)),
         api_enums::PaymentMethodType::Credit => Ok(dirval!(CardType = Credit)),
         api_enums::PaymentMethodType::Debit => Ok(dirval!(CardType = Debit)),
+        #[cfg(feature = "v2")]
+        api_enums::PaymentMethodType::Card => Ok(dirval!(CardType = Card)),
         api_enums::PaymentMethodType::Giropay => Ok(dirval!(BankRedirectType = Giropay)),
         api_enums::PaymentMethodType::Ideal => Ok(dirval!(BankRedirectType = Ideal)),
         api_enums::PaymentMethodType::Sofort => Ok(dirval!(BankRedirectType = Sofort)),
         api_enums::PaymentMethodType::Eps => Ok(dirval!(BankRedirectType = Eps)),
         api_enums::PaymentMethodType::Eft => Ok(dirval!(BankRedirectType = Eft)),
+        api_enums::PaymentMethodType::EftDebitOrder => Ok(dirval!(BankDebitType = EftDebitOrder)),
         api_enums::PaymentMethodType::Klarna => Ok(dirval!(PayLaterType = Klarna)),
+        api_enums::PaymentMethodType::Flexiti => Ok(dirval!(PayLaterType = Flexiti)),
         api_enums::PaymentMethodType::Affirm => Ok(dirval!(PayLaterType = Affirm)),
+        api_enums::PaymentMethodType::Payjustnow => Ok(dirval!(PayLaterType = Payjustnow)),
         api_enums::PaymentMethodType::AfterpayClearpay => {
             Ok(dirval!(PayLaterType = AfterpayClearpay))
         }
         api_enums::PaymentMethodType::GooglePay => Ok(dirval!(WalletType = GooglePay)),
+        api_enums::PaymentMethodType::Bluecode => Ok(dirval!(WalletType = Bluecode)),
         api_enums::PaymentMethodType::ApplePay => Ok(dirval!(WalletType = ApplePay)),
         api_enums::PaymentMethodType::Paypal => Ok(dirval!(WalletType = Paypal)),
         api_enums::PaymentMethodType::CryptoCurrency => Ok(dirval!(CryptoType = CryptoCurrency)),
@@ -44,7 +53,9 @@ fn get_dir_value_payment_method(
 
         api_enums::PaymentMethodType::Becs => Ok(dirval!(BankDebitType = Becs)),
         api_enums::PaymentMethodType::Sepa => Ok(dirval!(BankDebitType = Sepa)),
-
+        api_enums::PaymentMethodType::SepaGuarenteedDebit => {
+            Ok(dirval!(BankDebitType = SepaGuarenteedDebit))
+        }
         api_enums::PaymentMethodType::AliPay => Ok(dirval!(WalletType = AliPay)),
         api_enums::PaymentMethodType::AliPayHk => Ok(dirval!(WalletType = AliPayHk)),
         api_enums::PaymentMethodType::BancontactCard => {
@@ -56,6 +67,17 @@ fn get_dir_value_payment_method(
         api_enums::PaymentMethodType::Cashapp => Ok(dirval!(WalletType = Cashapp)),
         api_enums::PaymentMethodType::Multibanco => Ok(dirval!(BankTransferType = Multibanco)),
         api_enums::PaymentMethodType::Pix => Ok(dirval!(BankTransferType = Pix)),
+        api_enums::PaymentMethodType::PixKey => Ok(dirval!(BankTransferType = PixKey)),
+        api_enums::PaymentMethodType::PixEmv => Ok(dirval!(BankTransferType = PixEmv)),
+        api_enums::PaymentMethodType::PixQr => Ok(dirval!(BankTransferType = PixQr)),
+        api_enums::PaymentMethodType::PixAutomaticoPush => {
+            Ok(dirval!(BankTransferType = PixAutomaticoPush))
+        }
+        api_enums::PaymentMethodType::PixAutomaticoQr => {
+            Ok(dirval!(BankTransferType = PixAutomaticoQr))
+        }
+        api_enums::PaymentMethodType::Payshap => Ok(dirval!(BankTransferType = Payshap)),
+        api_enums::PaymentMethodType::PayshapProxy => Ok(dirval!(BankTransferType = PayshapProxy)),
         api_enums::PaymentMethodType::Pse => Ok(dirval!(BankTransferType = Pse)),
         api_enums::PaymentMethodType::Interac => Ok(dirval!(BankRedirectType = Interac)),
         api_enums::PaymentMethodType::OnlineBankingCzechRepublic => {
@@ -112,6 +134,7 @@ fn get_dir_value_payment_method(
         }
         api_enums::PaymentMethodType::BniVa => Ok(dirval!(BankTransferType = BniVa)),
         api_enums::PaymentMethodType::BriVa => Ok(dirval!(BankTransferType = BriVa)),
+        api_enums::PaymentMethodType::Breadpay => Ok(dirval!(PayLaterType = Breadpay)),
         api_enums::PaymentMethodType::CimbVa => Ok(dirval!(BankTransferType = CimbVa)),
         api_enums::PaymentMethodType::DanamonVa => Ok(dirval!(BankTransferType = DanamonVa)),
         api_enums::PaymentMethodType::Indomaret => Ok(dirval!(VoucherType = Indomaret)),
@@ -119,8 +142,24 @@ fn get_dir_value_payment_method(
         api_enums::PaymentMethodType::LocalBankTransfer => {
             Ok(dirval!(BankTransferType = LocalBankTransfer))
         }
+        api_enums::PaymentMethodType::InstantBankTransfer => {
+            Ok(dirval!(BankTransferType = InstantBankTransfer))
+        }
+        api_enums::PaymentMethodType::InstantBankTransferFinland => {
+            Ok(dirval!(BankTransferType = InstantBankTransferFinland))
+        }
+        api_enums::PaymentMethodType::InstantBankTransferPoland => {
+            Ok(dirval!(BankTransferType = InstantBankTransferPoland))
+        }
+        api_enums::PaymentMethodType::Qris => Ok(dirval!(RealTimePaymentType = Qris)),
+        api_enums::PaymentMethodType::SepaBankTransfer => {
+            Ok(dirval!(BankTransferType = SepaBankTransfer))
+        }
         api_enums::PaymentMethodType::PermataBankTransfer => {
             Ok(dirval!(BankTransferType = PermataBankTransfer))
+        }
+        api_enums::PaymentMethodType::IndonesianBankTransfer => {
+            Ok(dirval!(BankTransferType = IndonesianBankTransfer))
         }
         api_enums::PaymentMethodType::PaySafeCard => Ok(dirval!(GiftCardType = PaySafeCard)),
         api_enums::PaymentMethodType::SevenEleven => Ok(dirval!(VoucherType = SevenEleven)),
@@ -130,6 +169,7 @@ fn get_dir_value_payment_method(
         api_enums::PaymentMethodType::Seicomart => Ok(dirval!(VoucherType = Seicomart)),
         api_enums::PaymentMethodType::PayEasy => Ok(dirval!(VoucherType = PayEasy)),
         api_enums::PaymentMethodType::Givex => Ok(dirval!(GiftCardType = Givex)),
+        api_enums::PaymentMethodType::BhnCardNetwork => Ok(dirval!(GiftCardType = BhnCardNetwork)),
         api_enums::PaymentMethodType::Benefit => Ok(dirval!(CardRedirectType = Benefit)),
         api_enums::PaymentMethodType::Knet => Ok(dirval!(CardRedirectType = Knet)),
         api_enums::PaymentMethodType::OpenBankingUk => {
@@ -141,6 +181,7 @@ fn get_dir_value_payment_method(
         api_enums::PaymentMethodType::Venmo => Ok(dirval!(WalletType = Venmo)),
         api_enums::PaymentMethodType::UpiIntent => Ok(dirval!(UpiType = UpiIntent)),
         api_enums::PaymentMethodType::UpiCollect => Ok(dirval!(UpiType = UpiCollect)),
+        api_enums::PaymentMethodType::UpiQr => Ok(dirval!(UpiType = UpiQr)),
         api_enums::PaymentMethodType::Mifinity => Ok(dirval!(WalletType = Mifinity)),
         api_enums::PaymentMethodType::Fps => Ok(dirval!(RealTimePaymentType = Fps)),
         api_enums::PaymentMethodType::DuitNow => Ok(dirval!(RealTimePaymentType = DuitNow)),
@@ -153,7 +194,204 @@ fn get_dir_value_payment_method(
         api_enums::PaymentMethodType::DirectCarrierBilling => {
             Ok(dirval!(MobilePaymentType = DirectCarrierBilling))
         }
+        api_enums::PaymentMethodType::RevolutPay => Ok(dirval!(WalletType = RevolutPay)),
+        api_enums::PaymentMethodType::OpenBanking => Ok(dirval!(BankRedirectType = OpenBanking)),
+        api_enums::PaymentMethodType::NetworkToken => Ok(dirval!(NetworkTokenType = NetworkToken)),
     }
+}
+
+#[cfg(feature = "v2")]
+fn compile_request_pm_types(
+    builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
+    pm_types: common_types::payment_methods::RequestPaymentMethodTypes,
+    pm: api_enums::PaymentMethod,
+) -> Result<cgraph::NodeId, KgraphError> {
+    let mut agg_nodes: Vec<(cgraph::NodeId, cgraph::Relation, cgraph::Strength)> = Vec::new();
+
+    let pmt_info = "PaymentMethodType";
+    let pmt_id = builder.make_value_node(
+        (pm_types.payment_method_subtype, pm)
+            .into_dir_value()
+            .map(Into::into)?,
+        Some(pmt_info),
+        None::<()>,
+    );
+    agg_nodes.push((
+        pmt_id,
+        cgraph::Relation::Positive,
+        match pm_types.payment_method_subtype {
+            api_enums::PaymentMethodType::Credit | api_enums::PaymentMethodType::Debit => {
+                cgraph::Strength::Weak
+            }
+
+            _ => cgraph::Strength::Strong,
+        },
+    ));
+
+    if let Some(card_networks) = pm_types.card_networks {
+        if !card_networks.is_empty() {
+            let dir_vals: Vec<dir::DirValue> = card_networks
+                .into_iter()
+                .map(IntoDirValue::into_dir_value)
+                .collect::<Result<_, _>>()?;
+
+            let card_network_info = "Card Networks";
+            let card_network_id = builder
+                .make_in_aggregator(dir_vals, Some(card_network_info), None::<()>)
+                .map_err(KgraphError::GraphConstructionError)?;
+
+            agg_nodes.push((
+                card_network_id,
+                cgraph::Relation::Positive,
+                cgraph::Strength::Weak,
+            ));
+        }
+    }
+
+    let currencies_data = pm_types
+        .accepted_currencies
+        .and_then(|accepted_currencies| match accepted_currencies {
+            common_types::payment_methods::AcceptedCurrencies::EnableOnly(curr)
+                if !curr.is_empty() =>
+            {
+                Some((
+                    curr.into_iter()
+                        .map(IntoDirValue::into_dir_value)
+                        .collect::<Result<_, _>>()
+                        .ok()?,
+                    cgraph::Relation::Positive,
+                ))
+            }
+
+            common_types::payment_methods::AcceptedCurrencies::DisableOnly(curr)
+                if !curr.is_empty() =>
+            {
+                Some((
+                    curr.into_iter()
+                        .map(IntoDirValue::into_dir_value)
+                        .collect::<Result<_, _>>()
+                        .ok()?,
+                    cgraph::Relation::Negative,
+                ))
+            }
+
+            _ => None,
+        });
+
+    if let Some((currencies, relation)) = currencies_data {
+        let accepted_currencies_info = "Accepted Currencies";
+        let accepted_currencies_id = builder
+            .make_in_aggregator(currencies, Some(accepted_currencies_info), None::<()>)
+            .map_err(KgraphError::GraphConstructionError)?;
+
+        agg_nodes.push((accepted_currencies_id, relation, cgraph::Strength::Strong));
+    }
+
+    let mut amount_nodes = Vec::with_capacity(2);
+
+    if let Some(min_amt) = pm_types.minimum_amount {
+        let num_val = NumValue {
+            number: min_amt,
+            refinement: Some(NumValueRefinement::GreaterThanEqual),
+        };
+
+        let min_amt_info = "Minimum Amount";
+        let min_amt_id = builder.make_value_node(
+            dir::DirValue::PaymentAmount(num_val).into(),
+            Some(min_amt_info),
+            None::<()>,
+        );
+
+        amount_nodes.push(min_amt_id);
+    }
+
+    if let Some(max_amt) = pm_types.maximum_amount {
+        let num_val = NumValue {
+            number: max_amt,
+            refinement: Some(NumValueRefinement::LessThanEqual),
+        };
+
+        let max_amt_info = "Maximum Amount";
+        let max_amt_id = builder.make_value_node(
+            dir::DirValue::PaymentAmount(num_val).into(),
+            Some(max_amt_info),
+            None::<()>,
+        );
+
+        amount_nodes.push(max_amt_id);
+    }
+
+    if !amount_nodes.is_empty() {
+        let zero_num_val = NumValue {
+            number: MinorUnit::zero(),
+            refinement: None,
+        };
+
+        let zero_amt_id = builder.make_value_node(
+            dir::DirValue::PaymentAmount(zero_num_val).into(),
+            Some("zero_amount"),
+            None::<()>,
+        );
+
+        let or_node_neighbor_id = if amount_nodes.len() == 1 {
+            amount_nodes
+                .first()
+                .copied()
+                .ok_or(KgraphError::IndexingError)?
+        } else {
+            let nodes = amount_nodes
+                .iter()
+                .copied()
+                .map(|node_id| {
+                    (
+                        node_id,
+                        cgraph::Relation::Positive,
+                        cgraph::Strength::Strong,
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            builder
+                .make_all_aggregator(
+                    &nodes,
+                    Some("amount_constraint_aggregator"),
+                    None::<()>,
+                    None,
+                )
+                .map_err(KgraphError::GraphConstructionError)?
+        };
+
+        let any_aggregator = builder
+            .make_any_aggregator(
+                &[
+                    (
+                        zero_amt_id,
+                        cgraph::Relation::Positive,
+                        cgraph::Strength::Strong,
+                    ),
+                    (
+                        or_node_neighbor_id,
+                        cgraph::Relation::Positive,
+                        cgraph::Strength::Strong,
+                    ),
+                ],
+                Some("zero_plus_limits_amount_aggregator"),
+                None::<()>,
+                None,
+            )
+            .map_err(KgraphError::GraphConstructionError)?;
+
+        agg_nodes.push((
+            any_aggregator,
+            cgraph::Relation::Positive,
+            cgraph::Strength::Strong,
+        ));
+    }
+
+    let pmt_all_aggregator_info = "All Aggregator for PaymentMethodType";
+    builder
+        .make_all_aggregator(&agg_nodes, Some(pmt_all_aggregator_info), None::<()>, None)
+        .map_err(KgraphError::GraphConstructionError)
 }
 
 #[cfg(feature = "v1")]
@@ -342,6 +580,71 @@ fn compile_request_pm_types(
         .map_err(KgraphError::GraphConstructionError)
 }
 
+#[cfg(feature = "v2")]
+fn compile_payment_method_enabled(
+    builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
+    enabled: common_types::payment_methods::PaymentMethodsEnabled,
+) -> Result<Option<cgraph::NodeId>, KgraphError> {
+    let agg_id = if !enabled
+        .payment_method_subtypes
+        .as_ref()
+        .map(|v| v.is_empty())
+        .unwrap_or(true)
+    {
+        let pm_info = "PaymentMethod";
+        let pm_id = builder.make_value_node(
+            enabled
+                .payment_method_type
+                .into_dir_value()
+                .map(Into::into)?,
+            Some(pm_info),
+            None::<()>,
+        );
+
+        let mut agg_nodes: Vec<(cgraph::NodeId, cgraph::Relation, cgraph::Strength)> = Vec::new();
+
+        if let Some(pm_types) = enabled.payment_method_subtypes {
+            for pm_type in pm_types {
+                let node_id =
+                    compile_request_pm_types(builder, pm_type, enabled.payment_method_type)?;
+                agg_nodes.push((
+                    node_id,
+                    cgraph::Relation::Positive,
+                    cgraph::Strength::Strong,
+                ));
+            }
+        }
+
+        let any_aggregator_info = "Any aggregation for PaymentMethodsType";
+        let pm_type_agg_id = builder
+            .make_any_aggregator(&agg_nodes, Some(any_aggregator_info), None::<()>, None)
+            .map_err(KgraphError::GraphConstructionError)?;
+
+        let all_aggregator_info = "All aggregation for PaymentMethod";
+        let enabled_pm_agg_id = builder
+            .make_all_aggregator(
+                &[
+                    (pm_id, cgraph::Relation::Positive, cgraph::Strength::Strong),
+                    (
+                        pm_type_agg_id,
+                        cgraph::Relation::Positive,
+                        cgraph::Strength::Strong,
+                    ),
+                ],
+                Some(all_aggregator_info),
+                None::<()>,
+                None,
+            )
+            .map_err(KgraphError::GraphConstructionError)?;
+
+        Some(enabled_pm_agg_id)
+    } else {
+        None
+    };
+
+    Ok(agg_id)
+}
+
 #[cfg(feature = "v1")]
 fn compile_payment_method_enabled(
     builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
@@ -411,7 +714,7 @@ macro_rules! collect_global_variants {
     };
 }
 
-#[cfg(feature = "v1")]
+// #[cfg(feature = "v1")]
 fn global_vec_pmt(
     enabled_pmt: Vec<dir::DirValue>,
     builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
@@ -432,6 +735,7 @@ fn global_vec_pmt(
     global_vector.append(collect_global_variants!(CardRedirectType));
     global_vector.append(collect_global_variants!(OpenBankingType));
     global_vector.append(collect_global_variants!(MobilePaymentType));
+    global_vector.append(collect_global_variants!(NetworkTokenType));
     global_vector.push(dir::DirValue::PaymentMethod(
         dir::enums::PaymentMethod::Card,
     ));
@@ -519,7 +823,7 @@ fn compile_graph_for_countries_and_currencies(
         .map_err(KgraphError::GraphConstructionError)
 }
 
-#[cfg(feature = "v1")]
+// #[cfg(feature = "v1")]
 fn compile_config_graph(
     builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
     config: &kgraph_types::CountryCurrencyFilter,
@@ -613,14 +917,14 @@ fn compile_config_graph(
         .map_err(KgraphError::GraphConstructionError)
 }
 
-#[cfg(feature = "v1")]
+#[cfg(feature = "v2")]
 fn compile_merchant_connector_graph(
     builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
-    mca: admin_api::MerchantConnectorResponse,
+    mca: admin_api::MCACGraphData,
     config: &kgraph_types::CountryCurrencyFilter,
 ) -> Result<(), KgraphError> {
-    let connector = common_enums::RoutableConnectors::from_str(&mca.connector_name)
-        .map_err(|_| KgraphError::InvalidConnectorName(mca.connector_name.clone()))?;
+    let connector = euclid::enums::RoutableConnectors::try_from(mca.connector_name)
+        .map_err(|_| KgraphError::InvalidConnectorName(mca.connector_name))?;
 
     let mut agg_nodes: Vec<(cgraph::NodeId, cgraph::Relation, cgraph::Strength)> = Vec::new();
 
@@ -685,8 +989,79 @@ fn compile_merchant_connector_graph(
 }
 
 #[cfg(feature = "v1")]
+fn compile_merchant_connector_graph(
+    builder: &mut cgraph::ConstraintGraphBuilder<dir::DirValue>,
+    mca: admin_api::MCACGraphData,
+    config: &kgraph_types::CountryCurrencyFilter,
+) -> Result<(), KgraphError> {
+    let connector = euclid::enums::RoutableConnectors::from_str(&mca.connector_name)
+        .map_err(|_| KgraphError::InvalidConnectorName(mca.connector_name.clone()))?;
+
+    let mut agg_nodes: Vec<(cgraph::NodeId, cgraph::Relation, cgraph::Strength)> = Vec::new();
+
+    if let Some(pms_enabled) = mca.payment_methods_enabled.clone() {
+        for pm_enabled in pms_enabled {
+            let maybe_pm_enabled_id = compile_payment_method_enabled(builder, pm_enabled)?;
+            if let Some(pm_enabled_id) = maybe_pm_enabled_id {
+                agg_nodes.push((
+                    pm_enabled_id,
+                    cgraph::Relation::Positive,
+                    cgraph::Strength::Strong,
+                ));
+            }
+        }
+    }
+
+    let aggregator_info = "Available Payment methods for connector";
+    let pms_enabled_agg_id = builder
+        .make_any_aggregator(&agg_nodes, Some(aggregator_info), None::<()>, None)
+        .map_err(KgraphError::GraphConstructionError)?;
+
+    let config_info = "Config for respective PaymentMethodType for the connector";
+
+    let config_enabled_agg_id = compile_config_graph(builder, config, connector)?;
+
+    let domain_level_node_id = builder
+        .make_all_aggregator(
+            &[
+                (
+                    config_enabled_agg_id,
+                    cgraph::Relation::Positive,
+                    cgraph::Strength::Normal,
+                ),
+                (
+                    pms_enabled_agg_id,
+                    cgraph::Relation::Positive,
+                    cgraph::Strength::Normal,
+                ),
+            ],
+            Some(config_info),
+            None::<()>,
+            None,
+        )
+        .map_err(KgraphError::GraphConstructionError)?;
+    let connector_dir_val = dir::DirValue::Connector(Box::new(ast::ConnectorChoice { connector }));
+
+    let connector_info = "Connector";
+    let connector_node_id =
+        builder.make_value_node(connector_dir_val.into(), Some(connector_info), None::<()>);
+
+    builder
+        .make_edge(
+            domain_level_node_id,
+            connector_node_id,
+            cgraph::Strength::Normal,
+            cgraph::Relation::Positive,
+            None::<cgraph::DomainId>,
+        )
+        .map_err(KgraphError::GraphConstructionError)?;
+
+    Ok(())
+}
+
+// #[cfg(feature = "v1")]
 pub fn make_mca_graph(
-    accts: Vec<admin_api::MerchantConnectorResponse>,
+    accts: Vec<admin_api::MCACGraphData>,
     config: &kgraph_types::CountryCurrencyFilter,
 ) -> Result<cgraph::ConstraintGraph<dir::DirValue>, KgraphError> {
     let mut builder = cgraph::ConstraintGraphBuilder::new();
@@ -704,8 +1079,6 @@ pub fn make_mca_graph(
 #[cfg(feature = "v1")]
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-
     use std::collections::{HashMap, HashSet};
 
     use api_models::enums as api_enums;
@@ -720,7 +1093,6 @@ mod tests {
 
     fn build_test_data() -> ConstraintGraph<dir::DirValue> {
         use api_models::{admin::*, payment_methods::*};
-        let profile_id = common_utils::generate_profile_id_of_default_length();
 
         // #[cfg(feature = "v2")]
         // let stripe_account = MerchantConnectorResponse {
@@ -728,7 +1100,7 @@ mod tests {
         //     connector_name: "stripe".to_string(),
         //     id: common_utils::generate_merchant_connector_account_id_of_default_length(),
         //     connector_label: Some("something".to_string()),
-        //     connector_account_details: masking::Secret::new(serde_json::json!({})),
+        //     connector_account_details: hyperswitch_masking::Secret::new(serde_json::json!({})),
         //     disabled: None,
         //     metadata: None,
         //     payment_methods_enabled: Some(vec![PaymentMethodsEnabled {
@@ -778,19 +1150,8 @@ mod tests {
         //     connector_wallets_details: None,
         // };
         #[cfg(feature = "v1")]
-        let stripe_account = MerchantConnectorResponse {
-            connector_type: api_enums::ConnectorType::FizOperations,
+        let stripe_account = MCACGraphData {
             connector_name: "stripe".to_string(),
-            merchant_connector_id:
-                common_utils::generate_merchant_connector_account_id_of_default_length(),
-            business_country: Some(api_enums::CountryAlpha2::US),
-            connector_label: Some("something".to_string()),
-            business_label: Some("food".to_string()),
-            business_sub_label: None,
-            connector_account_details: masking::Secret::new(serde_json::json!({})),
-            test_mode: None,
-            disabled: None,
-            metadata: None,
             payment_methods_enabled: Some(vec![PaymentMethodsEnabled {
                 payment_method: api_enums::PaymentMethod::Card,
                 payment_method_types: Some(vec![
@@ -807,8 +1168,8 @@ mod tests {
                         accepted_countries: None,
                         minimum_amount: Some(MinorUnit::new(10)),
                         maximum_amount: Some(MinorUnit::new(1000)),
-                        recurring_enabled: true,
-                        installment_payment_enabled: true,
+                        recurring_enabled: Some(true),
+                        installment_payment_enabled: Some(true),
                     },
                     RequestPaymentMethodTypes {
                         payment_method_type: api_enums::PaymentMethodType::Debit,
@@ -823,19 +1184,11 @@ mod tests {
                         accepted_countries: None,
                         minimum_amount: Some(MinorUnit::new(10)),
                         maximum_amount: Some(MinorUnit::new(1000)),
-                        recurring_enabled: true,
-                        installment_payment_enabled: true,
+                        recurring_enabled: Some(true),
+                        installment_payment_enabled: Some(true),
                     },
                 ]),
             }]),
-            frm_configs: None,
-            connector_webhook_details: None,
-            profile_id,
-            applepay_verified_domains: None,
-            pm_auth_config: None,
-            status: api_enums::ConnectorStatus::Inactive,
-            additional_merchant_data: None,
-            connector_wallets_details: None,
         };
 
         let config_map = kgraph_types::CountryCurrencyFilter {
@@ -1188,8 +1541,7 @@ mod tests {
             }
         ]);
 
-        let data: Vec<admin_api::MerchantConnectorResponse> =
-            serde_json::from_value(value).expect("data");
+        let data: Vec<admin_api::MCACGraphData> = serde_json::from_value(value).expect("data");
         let config = kgraph_types::CountryCurrencyFilter {
             connector_configs: HashMap::new(),
             default_configs: None,

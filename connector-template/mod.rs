@@ -1,7 +1,7 @@
 pub mod transformers;
 
 use error_stack::{report, ResultExt};
-use masking::{ExposeInterface, Mask};
+use hyperswitch_masking::{ExposeInterface, Mask};
 
 use common_utils::{
     errors::CustomResult,
@@ -39,11 +39,17 @@ use hyperswitch_interfaces::{
     types::{self, Response},
     webhooks,
 };
+use std::sync::LazyLock;
+
+use common_enums::enums;
+use hyperswitch_interfaces::api::ConnectorSpecifications;
+use hyperswitch_domain_models::router_response_types::{ConnectorInfo, SupportedPaymentMethods};
 use crate::{
     constants::headers,
     types::ResponseRouterData,
     utils,
 };
+use hyperswitch_domain_models::payment_method_data::PaymentMethodData;
 
 use transformers as {{project-name | downcase}};
 
@@ -90,7 +96,7 @@ where
         &self,
         req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError> {
         let mut header = vec![(
             headers::CONTENT_TYPE.to_string(),
             self.get_content_type().to_string().into(),
@@ -121,7 +127,7 @@ impl ConnectorCommon for {{project-name | downcase | pascal_case}} {
         connectors.{{project-name}}.base_url.as_ref()
     }
 
-    fn get_auth_header(&self, auth_type:&ConnectorAuthType)-> CustomResult<Vec<(String,masking::Maskable<String>)>,errors::ConnectorError> {
+    fn get_auth_header(&self, auth_type:&ConnectorAuthType)-> CustomResult<Vec<(String,hyperswitch_masking::Maskable<String>)>,errors::ConnectorError> {
         let auth =  {{project-name | downcase}}::{{project-name | downcase | pascal_case}}AuthType::try_from(auth_type)
             .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
         Ok(vec![(headers::AUTHORIZATION.to_string(), auth.api_key.expose().into_masked())])
@@ -147,13 +153,28 @@ impl ConnectorCommon for {{project-name | downcase | pascal_case}} {
             reason: response.reason,
             attempt_status: None,
             connector_transaction_id: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
 
+
 impl ConnectorValidation for {{project-name | downcase | pascal_case}}
 {
-    //TODO: implement functions when support enabled
+
+    fn validate_psync_reference_id(
+        &self,
+        _data: &PaymentsSyncData,
+        _is_three_ds: bool,
+        _status: enums::AttemptStatus,
+        _connector_meta_data: Option<common_utils::pii::SecretSerdeValue>,
+    ) -> CustomResult<(), errors::ConnectorError> {
+        Ok(())
+    }
 }
 
 impl
@@ -186,7 +207,7 @@ impl
         PaymentsAuthorizeData,
         PaymentsResponseData,
     > for {{project-name | downcase | pascal_case}} {
-    fn get_headers(&self, req: &PaymentsAuthorizeRouterData, connectors: &Connectors,) -> CustomResult<Vec<(String, masking::Maskable<String>)>,errors::ConnectorError> {
+    fn get_headers(&self, req: &PaymentsAuthorizeRouterData, connectors: &Connectors,) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>,errors::ConnectorError> {
         self.build_headers(req, connectors)
     }
 
@@ -194,7 +215,10 @@ impl
         self.common_get_content_type()
     }
 
-    fn get_url(&self, _req: &PaymentsAuthorizeRouterData, _connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
+    fn get_url(
+        &self,
+        _req: &PaymentsAuthorizeRouterData,
+        _connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
         Err(errors::ConnectorError::NotImplemented("get_url method".to_string()).into())
     }
 
@@ -263,7 +287,7 @@ impl
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError> {
         self.build_headers(req, connectors)
     }
 
@@ -333,7 +357,7 @@ impl
         &self,
         req: &PaymentsCaptureRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError> {
         self.build_headers(req, connectors)
     }
 
@@ -417,7 +441,7 @@ impl
         RefundsData,
         RefundsResponseData,
     > for {{project-name | downcase | pascal_case}} {
-    fn get_headers(&self, req: &RefundsRouterData<Execute>, connectors: &Connectors,) -> CustomResult<Vec<(String,masking::Maskable<String>)>,errors::ConnectorError> {
+    fn get_headers(&self, req: &RefundsRouterData<Execute>, connectors: &Connectors,) -> CustomResult<Vec<(String,hyperswitch_masking::Maskable<String>)>,errors::ConnectorError> {
         self.build_headers(req, connectors)
     }
 
@@ -425,7 +449,10 @@ impl
         self.common_get_content_type()
     }
 
-    fn get_url(&self, _req: &RefundsRouterData<Execute>, _connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
+    fn get_url(
+        &self,
+        _req: &RefundsRouterData<Execute>,
+        _connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
         Err(errors::ConnectorError::NotImplemented("get_url method".to_string()).into())
     }
 
@@ -479,7 +506,7 @@ impl
 
 impl
     ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for {{project-name | downcase | pascal_case}} {
-    fn get_headers(&self, req: &RefundSyncRouterData,connectors: &Connectors,) -> CustomResult<Vec<(String, masking::Maskable<String>)>,errors::ConnectorError> {
+    fn get_headers(&self, req: &RefundSyncRouterData,connectors: &Connectors,) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>,errors::ConnectorError> {
         self.build_headers(req, connectors)
     }
 
@@ -487,7 +514,9 @@ impl
         self.common_get_content_type()
     }
 
-    fn get_url(&self, _req: &RefundSyncRouterData,_connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
+    fn get_url(
+        &self,
+        _req: &RefundSyncRouterData,_connectors: &Connectors,) -> CustomResult<String,errors::ConnectorError> {
         Err(errors::ConnectorError::NotImplemented("get_url method".to_string()).into())
     }
 
@@ -540,6 +569,7 @@ impl webhooks::IncomingWebhook for {{project-name | downcase | pascal_case}} {
     fn get_webhook_event_type(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
@@ -547,10 +577,33 @@ impl webhooks::IncomingWebhook for {{project-name | downcase | pascal_case}} {
     fn get_webhook_resource_object(
         &self,
         _request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
 }
 
-impl ConnectorSpecifications for {{project-name | downcase | pascal_case}} {}
-   
+static {{project-name | upcase}}_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(SupportedPaymentMethods::new);
+
+static {{project-name | upcase}}_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+    display_name: "{{project-name | downcase | pascal_case}}",
+    description: "{{project-name | downcase | pascal_case}} connector",
+    connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+    integration_status: enums::ConnectorIntegrationStatus::Live,
+};
+
+static {{project-name | upcase}}_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 0] = [];
+
+impl ConnectorSpecifications for {{project-name | downcase | pascal_case}} {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&{{project-name | upcase}}_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*{{project-name | upcase}}_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&{{project-name | upcase}}_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

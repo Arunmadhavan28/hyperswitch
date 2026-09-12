@@ -1,7 +1,14 @@
+use hyperswitch_domain_models::mandates;
 #[cfg(feature = "v1")]
 pub mod payment_approve;
 #[cfg(feature = "v1")]
 pub mod payment_cancel;
+#[cfg(feature = "v1")]
+pub mod payment_cancel_post_capture;
+
+#[cfg(feature = "v1")]
+pub mod payment_cancel_post_capture_sync;
+
 #[cfg(feature = "v1")]
 pub mod payment_capture;
 #[cfg(feature = "v1")]
@@ -9,9 +16,13 @@ pub mod payment_complete_authorize;
 #[cfg(feature = "v1")]
 pub mod payment_confirm;
 #[cfg(feature = "v1")]
+pub mod payment_confirm_external_vault_proxy;
+#[cfg(feature = "v1")]
 pub mod payment_create;
 #[cfg(feature = "v1")]
 pub mod payment_post_session_tokens;
+#[cfg(feature = "v1")]
+pub mod payment_recurrence;
 #[cfg(feature = "v1")]
 pub mod payment_reject;
 pub mod payment_response;
@@ -26,23 +37,31 @@ pub mod payment_status;
 #[cfg(feature = "v1")]
 pub mod payment_update;
 #[cfg(feature = "v1")]
+pub mod payment_update_metadata;
+#[cfg(feature = "v1")]
+pub mod payments_extend_authorization;
+#[cfg(feature = "v1")]
 pub mod payments_incremental_authorization;
 #[cfg(feature = "v1")]
 pub mod tax_calculation;
 
 #[cfg(feature = "v2")]
+pub mod payment_attempt_list;
+#[cfg(feature = "v2")]
 pub mod payment_attempt_record;
 #[cfg(feature = "v2")]
 pub mod payment_confirm_intent;
-#[cfg(feature = "v2")]
-pub mod proxy_payments_intent;
-
 #[cfg(feature = "v2")]
 pub mod payment_create_intent;
 #[cfg(feature = "v2")]
 pub mod payment_get_intent;
 #[cfg(feature = "v2")]
 pub mod payment_update_intent;
+#[cfg(feature = "v2")]
+pub mod proxy_payments_intent;
+
+#[cfg(feature = "v2")]
+pub mod external_vault_proxy_payment_intent;
 
 #[cfg(feature = "v2")]
 pub mod payment_get;
@@ -50,13 +69,20 @@ pub mod payment_get;
 #[cfg(feature = "v2")]
 pub mod payment_capture_v2;
 
+#[cfg(feature = "v2")]
+pub mod payment_cancel_v2;
+
 use api_models::enums::FrmSuggestion;
 #[cfg(all(feature = "v1", feature = "dynamic_routing"))]
 use api_models::routing::RoutableConnectorChoice;
 use async_trait::async_trait;
+#[cfg(feature = "v1")]
+use common_utils::ext_traits::AsyncExt;
 use error_stack::{report, ResultExt};
 use router_env::{instrument, tracing};
 
+#[cfg(feature = "v2")]
+pub use self::payment_attempt_list::PaymentGetListAttempts;
 #[cfg(feature = "v2")]
 pub use self::payment_get::PaymentGet;
 #[cfg(feature = "v2")]
@@ -67,10 +93,15 @@ pub use self::payment_update_intent::PaymentUpdateIntent;
 #[cfg(feature = "v1")]
 pub use self::{
     payment_approve::PaymentApprove, payment_cancel::PaymentCancel,
+    payment_cancel_post_capture::PaymentCancelPostCapture,
+    payment_cancel_post_capture_sync::PaymentCancelPostCaptureSync,
     payment_capture::PaymentCapture, payment_confirm::PaymentConfirm,
+    payment_confirm_external_vault_proxy::PaymentExternalVaultProxyConfirm,
     payment_create::PaymentCreate, payment_post_session_tokens::PaymentPostSessionTokens,
     payment_reject::PaymentReject, payment_session::PaymentSession, payment_start::PaymentStart,
     payment_status::PaymentStatus, payment_update::PaymentUpdate,
+    payment_update_metadata::PaymentUpdateMetadata,
+    payments_extend_authorization::PaymentExtendAuthorization,
     payments_incremental_authorization::PaymentIncrementalAuthorization,
     tax_calculation::PaymentSessionUpdate,
 };
@@ -80,8 +111,16 @@ pub use self::{
     payment_session_intent::PaymentSessionIntent,
 };
 use super::{helpers, CustomerDetails, OperationSessionGetters, OperationSessionSetters};
+#[cfg(feature = "v1")]
+pub use crate::core::payment_methods::transformers::PaymentMethodFetchData;
+#[cfg(feature = "v2")]
+use crate::core::payments;
 use crate::{
-    core::errors::{self, CustomResult, RouterResult},
+    core::{
+        configs::dimension_state,
+        errors::{self, CustomResult, RouterResult},
+        utils as core_utils,
+    },
     routes::{app::ReqState, SessionState},
     services,
     types::{
@@ -153,7 +192,7 @@ pub trait ValidateRequest<F, R, D> {
     fn validate_request<'b>(
         &'b self,
         request: &R,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Processor,
     ) -> RouterResult<(BoxedOperation<'b, F, R, D>, ValidateResult)>;
 }
 
@@ -162,8 +201,29 @@ pub trait ValidateRequest<F, R, D> {
     fn validate_request(
         &self,
         request: &R,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Platform,
     ) -> RouterResult<ValidateResult>;
+}
+
+#[cfg(feature = "v1")]
+/// Minimal payment information that can be passed to get_trackers to avoid redundant DB calls
+pub struct PaymentPreFetchedInformation {
+    pub payment_intent: storage::PaymentIntent,
+    pub payment_attempt: storage::PaymentAttempt,
+}
+
+/// Identifies the payments core that invoked `get_trackers`.
+///
+/// Threaded into the v1 `get_trackers` (like `auth_flow`) so that, on a single-call
+/// create+confirm (`confirm = true`), `PaymentCreate` knows which confirm operation to
+/// hand off to: the standard `PaymentConfirm` or, for the external vault proxy core,
+/// `PaymentExternalVaultProxyConfirm`. Every other operation ignores it.
+#[cfg(feature = "v1")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaymentFlowKind {
+    #[default]
+    Standard,
+    ExternalVaultProxy,
 }
 
 #[cfg(feature = "v2")]
@@ -191,11 +251,13 @@ pub trait GetTracker<F: Clone, D, R>: Send {
         state: &'a SessionState,
         payment_id: &api::PaymentIdType,
         request: &R,
-        merchant_account: &domain::MerchantAccount,
-        mechant_key_store: &domain::MerchantKeyStore,
+        platform: &domain::Platform,
         auth_flow: services::AuthFlow,
+        flow_kind: PaymentFlowKind,
         header_payload: &hyperswitch_domain_models::payments::HeaderPayload,
-        platform_merchant_account: Option<&domain::MerchantAccount>,
+        payment_method_fetch_data: PaymentMethodFetchData,
+        dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
+        payment_pre_fetched_info: Option<PaymentPreFetchedInformation>,
     ) -> RouterResult<GetTrackerResponse<'a, F, R, D>>;
 
     #[cfg(feature = "v2")]
@@ -205,12 +267,28 @@ pub trait GetTracker<F: Clone, D, R>: Send {
         state: &'a SessionState,
         payment_id: &common_utils::id_type::GlobalPaymentId,
         request: &R,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Platform,
         profile: &domain::Profile,
-        mechant_key_store: &domain::MerchantKeyStore,
         header_payload: &hyperswitch_domain_models::payments::HeaderPayload,
-        platform_merchant_account: Option<&domain::MerchantAccount>,
     ) -> RouterResult<GetTrackerResponse<D>>;
+
+    #[cfg(feature = "v2")]
+    #[allow(clippy::too_many_arguments)]
+    async fn get_trackers_for_split_payments<'a>(
+        &'a self,
+        _state: &'a SessionState,
+        _payment_id: &common_utils::id_type::GlobalPaymentId,
+        _request: &R,
+        _merchant_context: &domain::Platform,
+        _profile: &domain::Profile,
+        _header_payload: &hyperswitch_domain_models::payments::HeaderPayload,
+        _pm_split_amount_data: domain::PaymentMethodDetailsWithSplitAmount,
+        _attempts_group_id: &common_utils::id_type::GlobalAttemptGroupId,
+    ) -> RouterResult<GetTrackerResponse<D>> {
+        Err(errors::ApiErrorResponse::NotImplemented {
+            message: errors::NotImplementedMessage::Default,
+        })?
+    }
 
     async fn validate_request_with_state(
         &self,
@@ -226,14 +304,17 @@ pub trait GetTracker<F: Clone, D, R>: Send {
 #[async_trait]
 pub trait Domain<F: Clone, R, D>: Send + Sync {
     #[cfg(feature = "v1")]
+    #[allow(clippy::too_many_arguments)]
     /// This will fetch customer details, (this operation is flow specific)
     async fn get_or_create_customer_details<'a>(
         &'a self,
         state: &SessionState,
         payment_data: &mut D,
         request: Option<CustomerDetails>,
-        merchant_key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
+        provider: &domain::Provider,
+        initiator: Option<&domain::Initiator>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
+        _mandate_type: Option<api::MandateTransactionType>,
     ) -> CustomResult<(BoxedOperation<'a, F, R, D>, Option<domain::Customer>), errors::StorageError>;
 
     #[cfg(feature = "v2")]
@@ -246,6 +327,18 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         storage_scheme: enums::MerchantStorageScheme,
     ) -> CustomResult<(BoxedOperation<'a, F, R, D>, Option<domain::Customer>), errors::StorageError>;
 
+    /// Update customer information at provider level
+    /// This handles connector_customer_id updates in the Customer table
+    async fn update_customer<'a>(
+        &'a self,
+        _db: &'a SessionState,
+        _provider: &domain::Provider,
+        _customer: Option<domain::Customer>,
+        _updated_customer: Option<storage::CustomerUpdate>,
+    ) -> RouterResult<()> {
+        Ok(())
+    }
+
     #[cfg(feature = "v2")]
     /// This will run the decision manager for the payment
     async fn run_decision_manager<'a>(
@@ -256,6 +349,31 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
     ) -> CustomResult<(), errors::ApiErrorResponse> {
         Ok(())
     }
+    #[cfg(feature = "v1")]
+    #[allow(clippy::too_many_arguments)]
+    async fn create_payment_method(
+        &self,
+        _state: &SessionState,
+        _request: &R,
+        _platform: &domain::Platform,
+        _payment_data: &mut D,
+        _customer: Option<&domain::Customer>,
+        _business_profile: &domain::Profile,
+        _feature_config: &core_utils::FeatureConfig,
+    ) -> RouterResult<()> {
+        Ok(())
+    }
+
+    #[cfg(feature = "v1")]
+    async fn fetch_payment_method(
+        &self,
+        _state: &SessionState,
+        _request: &R,
+        _platform: &domain::Platform,
+        _feature_config: &core_utils::FeatureConfig,
+    ) -> RouterResult<PaymentMethodFetchData> {
+        Ok(PaymentMethodFetchData::default())
+    }
 
     #[allow(clippy::too_many_arguments)]
     async fn make_pm_data<'a>(
@@ -263,8 +381,7 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         state: &'a SessionState,
         payment_data: &mut D,
         storage_scheme: enums::MerchantStorageScheme,
-        merchant_key_store: &domain::MerchantKeyStore,
-        customer: &Option<domain::Customer>,
+        platform: &domain::Platform,
         business_profile: &domain::Profile,
         should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -286,29 +403,40 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
     #[cfg(feature = "v1")]
     async fn get_connector<'a>(
         &'a self,
-        merchant_account: &domain::MerchantAccount,
+        processor: &domain::Processor,
         state: &SessionState,
         request: &R,
         payment_intent: &storage::PaymentIntent,
-        mechant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorChoice, errors::ApiErrorResponse>;
+
+    #[cfg(feature = "v2")]
+    async fn get_connector_from_request<'a>(
+        &'a self,
+        state: &SessionState,
+        request: &R,
+        payment_data: &mut D,
+    ) -> CustomResult<api::ConnectorData, errors::ApiErrorResponse> {
+        Err(report!(errors::ApiErrorResponse::InternalServerError))
+            .attach_printable_lazy(|| "get connector for tunnel not implemented".to_string())
+    }
 
     #[cfg(feature = "v2")]
     async fn perform_routing<'a>(
         &'a self,
-        merchant_account: &domain::MerchantAccount,
+        platform: &domain::Platform,
         business_profile: &domain::Profile,
         state: &SessionState,
         // TODO: do not take the whole payment data here
         payment_data: &mut D,
-        mechant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<ConnectorCallType, errors::ApiErrorResponse>;
 
     async fn populate_payment_data<'a>(
         &'a self,
         _state: &SessionState,
         _payment_data: &mut D,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
+        _business_profile: &domain::Profile,
+        _connector_data: &api::ConnectorData,
     ) -> CustomResult<(), errors::ApiErrorResponse> {
         Ok(())
     }
@@ -320,9 +448,10 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         _payment_data: &mut D,
         _should_continue_confirm_transaction: &mut bool,
         _connector_call_type: &ConnectorCallType,
-        _merchant_account: &domain::Profile,
-        _key_store: &domain::MerchantKeyStore,
-        _mandate_type: Option<api_models::payments::MandateTransactionType>,
+        _business_profile: &domain::Profile,
+        _processor: &domain::Processor,
+        _initiator: Option<&domain::Initiator>,
+        _mandate_type: Option<mandates::MandateTransactionType>,
     ) -> CustomResult<(), errors::ApiErrorResponse> {
         Ok(())
     }
@@ -335,9 +464,8 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         _should_continue_confirm_transaction: &mut bool,
         _connector_call_type: &ConnectorCallType,
         _business_profile: &domain::Profile,
-        _key_store: &domain::MerchantKeyStore,
-        _mandate_type: Option<api_models::payments::MandateTransactionType>,
-        _do_authorization_confirmation: &bool,
+        _platform: &domain::Platform,
+        _mandate_type: Option<mandates::MandateTransactionType>,
     ) -> CustomResult<(), errors::ApiErrorResponse> {
         Ok(())
     }
@@ -349,8 +477,7 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         _payment_data: &mut D,
         _connector_call_type: &ConnectorCallType,
         _business_profile: &domain::Profile,
-        _key_store: &domain::MerchantKeyStore,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
     ) -> CustomResult<(), errors::ApiErrorResponse> {
         Ok(())
     }
@@ -359,9 +486,10 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut D,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }
@@ -376,13 +504,53 @@ pub trait Domain<F: Clone, R, D>: Send + Sync {
         Ok(())
     }
 
+    #[cfg(feature = "v2")]
+    async fn create_or_fetch_payment_method<'a>(
+        &'a self,
+        state: &SessionState,
+        platform: &domain::Platform,
+        business_profile: &domain::Profile,
+        payment_data: &mut D,
+    ) -> CustomResult<(), errors::ApiErrorResponse> {
+        Ok(())
+    }
+
+    // does not propagate error to not affect the payment flow
+    // must add debugger in case of internal error
+    #[cfg(feature = "v2")]
+    async fn update_payment_method<'a>(
+        &'a self,
+        state: &SessionState,
+        platform: &domain::Platform,
+        payment_data: &mut D,
+    ) {
+    }
+
+    /// This function is used to apply the 3DS authentication strategy
+    async fn apply_three_ds_authentication_strategy<'a>(
+        &'a self,
+        _state: &SessionState,
+        _payment_data: &mut D,
+        _business_profile: &domain::Profile,
+    ) {
+    }
+
+    /// Get connector tokenization action
+    #[cfg(feature = "v2")]
+    async fn get_connector_tokenization_action<'a>(
+        &'a self,
+        _state: &SessionState,
+        _payment_data: &D,
+    ) -> RouterResult<(payments::TokenizationAction)> {
+        Ok(payments::TokenizationAction::SkipConnectorTokenization)
+    }
+
     // #[cfg(feature = "v2")]
     // async fn call_connector<'a, RouterDataReq>(
     //     &'a self,
     //     _state: &SessionState,
     //     _req_state: ReqState,
-    //     _merchant_account: &domain::MerchantAccount,
-    //     _key_store: &domain::MerchantKeyStore,
+    //     _platform: &domain::Platform,
     //     _business_profile: &domain::Profile,
     //     _payment_method_data: Option<&domain::PaymentMethodData>,
     //     _connector: api::ConnectorData,
@@ -409,13 +577,11 @@ pub trait UpdateTracker<F, D, Req>: Send {
         &'b self,
         db: &'b SessionState,
         req_state: ReqState,
+        processor: &domain::Processor,
         payment_data: D,
-        customer: Option<domain::Customer>,
-        storage_scheme: enums::MerchantStorageScheme,
-        updated_customer: Option<storage::CustomerUpdate>,
-        mechant_key_store: &domain::MerchantKeyStore,
         frm_suggestion: Option<FrmSuggestion>,
         header_payload: hyperswitch_domain_models::payments::HeaderPayload,
+        dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
     ) -> RouterResult<(BoxedOperation<'b, F, Req, D>, D)>
     where
         F: 'b + Send;
@@ -451,13 +617,13 @@ pub trait PostUpdateTracker<F, D, R: Send>: Send {
     async fn update_tracker<'b>(
         &'b self,
         db: &'b SessionState,
+        processor: &domain::Processor,
         payment_data: D,
         response: types::RouterData<F, R, PaymentsResponseData>,
-        key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
         locale: &Option<String>,
         #[cfg(feature = "dynamic_routing")] routable_connector: Vec<RoutableConnectorChoice>,
         #[cfg(feature = "dynamic_routing")] business_profile: &domain::Profile,
+        dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
     ) -> RouterResult<D>
     where
         F: 'b + Send + Sync;
@@ -466,10 +632,10 @@ pub trait PostUpdateTracker<F, D, R: Send>: Send {
     async fn update_tracker<'b>(
         &'b self,
         db: &'b SessionState,
+        processor: &domain::Processor,
+        initiator: Option<&domain::Initiator>,
         payment_data: D,
         response: types::RouterData<F, R, PaymentsResponseData>,
-        key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
     ) -> RouterResult<D>
     where
         F: 'b + Send + Sync,
@@ -480,10 +646,47 @@ pub trait PostUpdateTracker<F, D, R: Send>: Send {
         &self,
         _state: &SessionState,
         _resp: &types::RouterData<F, R, PaymentsResponseData>,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _platform: &domain::Platform,
         _payment_data: &mut D,
         _business_profile: &domain::Profile,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
+    ) -> CustomResult<(), errors::ApiErrorResponse>
+    where
+        F: 'b + Clone + Send + Sync,
+    {
+        Ok(())
+    }
+
+    /// Updates payment method mandate details after a successful payment.
+    /// This should be called with the appropriate provider that owns the payment method.
+    #[cfg(feature = "v1")]
+    async fn update_pm_and_mandate<'b>(
+        &self,
+        _state: &SessionState,
+        _provider: &domain::Provider,
+        _initiator: Option<&domain::Initiator>,
+        _payment_data: &D,
+        _router_data: &types::RouterData<F, R, PaymentsResponseData>,
+        _feature_config: &core_utils::FeatureConfig,
+    ) -> RouterResult<()>
+    where
+        F: 'b + Clone + Send + Sync,
+    {
+        Ok(())
+    }
+
+    #[cfg(feature = "v1")]
+    async fn update_modular_pm_and_mandate<'b>(
+        &self,
+        _state: &SessionState,
+        _resp: &types::RouterData<F, R, PaymentsResponseData>,
+        _platform: &domain::Platform,
+        // `PaymentData` is kept mutable for updating `payment_attempt.connector_mandate_detail`
+        // Ideally, this update should be moved to `update_trackers`
+        _payment_data: &mut D,
+        _business_profile: &domain::Profile,
+        _request_payment_method_data: Option<&domain::PaymentMethodData>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
     ) -> CustomResult<(), errors::ApiErrorResponse>
     where
         F: 'b + Clone + Send + Sync,
@@ -510,8 +713,10 @@ where
         state: &SessionState,
         payment_data: &mut D,
         _request: Option<CustomerDetails>,
-        merchant_key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
+        provider: &domain::Provider,
+        _initiator: Option<&domain::Initiator>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
+        _mandate_type: Option<api::MandateTransactionType>,
     ) -> CustomResult<
         (
             BoxedOperation<'a, F, api::PaymentsRetrieveRequest, D>,
@@ -520,36 +725,34 @@ where
         errors::StorageError,
     > {
         let db = &*state.store;
-        let customer = match payment_data.get_payment_intent().customer_id.as_ref() {
-            None => None,
-            Some(customer_id) => {
-                // This function is to retrieve customer details. If the customer is deleted, it returns
-                // customer details that contains the fields as Redacted
+        let merchant_key_store = provider.get_key_store();
+        let storage_scheme = provider.get_account().storage_scheme;
+        let customer = payment_data
+            .get_payment_intent()
+            .customer_id
+            .as_ref()
+            .async_map(|customer_id| async {
                 db.find_customer_optional_with_redacted_customer_details_by_customer_id_merchant_id(
-                    &state.into(),
                     customer_id,
                     &merchant_key_store.merchant_id,
                     merchant_key_store,
                     storage_scheme,
                 )
-                .await?
-            }
-        };
-
-        if let Some(email) = customer.as_ref().and_then(|inner| inner.email.clone()) {
-            payment_data.set_email_if_not_present(email.into());
-        }
+                .await
+            })
+            .await
+            .transpose()?
+            .flatten();
 
         Ok((Box::new(self), customer))
     }
 
     async fn get_connector<'a>(
         &'a self,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
         state: &SessionState,
         _request: &api::PaymentsRetrieveRequest,
         _payment_intent: &storage::PaymentIntent,
-        _merchant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorChoice, errors::ApiErrorResponse> {
         helpers::get_connector_default(state, None).await
     }
@@ -560,8 +763,7 @@ where
         _state: &'a SessionState,
         _payment_data: &mut D,
         _storage_scheme: enums::MerchantStorageScheme,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _customer: &Option<domain::Customer>,
+        _platform: &domain::Platform,
         _business_profile: &domain::Profile,
         _should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -576,9 +778,10 @@ where
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut D,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }
@@ -596,11 +799,13 @@ where
     #[cfg(feature = "v1")]
     async fn get_or_create_customer_details<'a>(
         &'a self,
-        state: &SessionState,
-        payment_data: &mut D,
+        _state: &SessionState,
+        _payment_data: &mut D,
         _request: Option<CustomerDetails>,
-        merchant_key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
+        _provider: &domain::Provider,
+        _initiator: Option<&domain::Initiator>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
+        _mandate_type: Option<api::MandateTransactionType>,
     ) -> CustomResult<
         (
             BoxedOperation<'a, F, api::PaymentsCaptureRequest, D>,
@@ -608,27 +813,11 @@ where
         ),
         errors::StorageError,
     > {
-        let db = &*state.store;
-
-        let customer = match payment_data.get_payment_intent().customer_id.as_ref() {
-            None => None,
-            Some(customer_id) => {
-                db.find_customer_optional_by_customer_id_merchant_id(
-                    &state.into(),
-                    customer_id,
-                    &merchant_key_store.merchant_id,
-                    merchant_key_store,
-                    storage_scheme,
-                )
-                .await?
-            }
-        };
-
-        if let Some(email) = customer.as_ref().and_then(|inner| inner.email.clone()) {
-            payment_data.set_email_if_not_present(email.into());
-        }
-
-        Ok((Box::new(self), customer))
+        // We don't need to fetch customer here.
+        // Customer details have already been populated in the payment_intent during Confirm
+        // The customer returned from this method is only used for updating connector_customer_id
+        // which does not happen in case of Capture
+        Ok((Box::new(self), None))
     }
 
     #[instrument(skip_all)]
@@ -655,8 +844,7 @@ where
         _state: &'a SessionState,
         _payment_data: &mut D,
         _storage_scheme: enums::MerchantStorageScheme,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _customer: &Option<domain::Customer>,
+        _platform: &domain::Platform,
         _business_profile: &domain::Profile,
         _should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -669,11 +857,10 @@ where
 
     async fn get_connector<'a>(
         &'a self,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
         state: &SessionState,
         _request: &api::PaymentsCaptureRequest,
         _payment_intent: &storage::PaymentIntent,
-        _merchant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorChoice, errors::ApiErrorResponse> {
         helpers::get_connector_default(state, None).await
     }
@@ -682,9 +869,10 @@ where
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut D,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }
@@ -702,11 +890,13 @@ where
     #[cfg(feature = "v1")]
     async fn get_or_create_customer_details<'a>(
         &'a self,
-        state: &SessionState,
-        payment_data: &mut D,
+        _state: &SessionState,
+        _payment_data: &mut D,
         _request: Option<CustomerDetails>,
-        merchant_key_store: &domain::MerchantKeyStore,
-        storage_scheme: enums::MerchantStorageScheme,
+        _provider: &domain::Provider,
+        _initiator: Option<&domain::Initiator>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
+        _mandate_type: Option<api::MandateTransactionType>,
     ) -> CustomResult<
         (
             BoxedOperation<'a, F, api::PaymentsCancelRequest, D>,
@@ -714,27 +904,12 @@ where
         ),
         errors::StorageError,
     > {
-        let db = &*state.store;
+        // We don't need to fetch customer here.
+        // Customer details have already been populated in the payment_intent during Confirm
+        // The customer returned from this method is only used for updating connector_customer_id
+        // which does not happen in case of Cancel
 
-        let customer = match payment_data.get_payment_intent().customer_id.as_ref() {
-            None => None,
-            Some(customer_id) => {
-                db.find_customer_optional_by_customer_id_merchant_id(
-                    &state.into(),
-                    customer_id,
-                    &merchant_key_store.merchant_id,
-                    merchant_key_store,
-                    storage_scheme,
-                )
-                .await?
-            }
-        };
-
-        if let Some(email) = customer.as_ref().and_then(|inner| inner.email.clone()) {
-            payment_data.set_email_if_not_present(email.into());
-        }
-
-        Ok((Box::new(self), customer))
+        Ok((Box::new(self), None))
     }
 
     #[instrument(skip_all)]
@@ -761,8 +936,7 @@ where
         _state: &'a SessionState,
         _payment_data: &mut D,
         _storage_scheme: enums::MerchantStorageScheme,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _customer: &Option<domain::Customer>,
+        _platform: &domain::Platform,
         _business_profile: &domain::Profile,
         _should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -775,11 +949,10 @@ where
 
     async fn get_connector<'a>(
         &'a self,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
         state: &SessionState,
         _request: &api::PaymentsCancelRequest,
         _payment_intent: &storage::PaymentIntent,
-        _merchant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorChoice, errors::ApiErrorResponse> {
         helpers::get_connector_default(state, None).await
     }
@@ -788,9 +961,10 @@ where
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut D,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }
@@ -810,8 +984,10 @@ where
         _state: &SessionState,
         _payment_data: &mut D,
         _request: Option<CustomerDetails>,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _storage_scheme: enums::MerchantStorageScheme,
+        _provider: &domain::Provider,
+        _initiator: Option<&domain::Initiator>,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantIdAndProfileId,
+        _mandate_type: Option<api::MandateTransactionType>,
     ) -> CustomResult<
         (
             BoxedOperation<'a, F, api::PaymentsRejectRequest, D>,
@@ -846,8 +1022,7 @@ where
         _state: &'a SessionState,
         _payment_data: &mut D,
         _storage_scheme: enums::MerchantStorageScheme,
-        _merchant_key_store: &domain::MerchantKeyStore,
-        _customer: &Option<domain::Customer>,
+        _platform: &domain::Platform,
         _business_profile: &domain::Profile,
         _should_retry_with_pan: bool,
     ) -> RouterResult<(
@@ -860,11 +1035,10 @@ where
 
     async fn get_connector<'a>(
         &'a self,
-        _merchant_account: &domain::MerchantAccount,
+        _processor: &domain::Processor,
         state: &SessionState,
         _request: &api::PaymentsRejectRequest,
         _payment_intent: &storage::PaymentIntent,
-        _merchant_key_store: &domain::MerchantKeyStore,
     ) -> CustomResult<api::ConnectorChoice, errors::ApiErrorResponse> {
         helpers::get_connector_default(state, None).await
     }
@@ -873,9 +1047,10 @@ where
     async fn guard_payment_against_blocklist<'a>(
         &'a self,
         _state: &SessionState,
-        _merchant_account: &domain::MerchantAccount,
-        _key_store: &domain::MerchantKeyStore,
+        _processor: &domain::Processor,
+        _dimensions: &dimension_state::DimensionsWithProcessorAndProviderMerchantId,
         _payment_data: &mut D,
+        _business_profile: &domain::Profile,
     ) -> CustomResult<bool, errors::ApiErrorResponse> {
         Ok(false)
     }

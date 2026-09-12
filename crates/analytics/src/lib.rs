@@ -16,12 +16,13 @@ pub mod payment_intents;
 pub mod payments;
 mod query;
 pub mod refunds;
+pub mod routing_events;
 pub mod sdk_events;
 pub mod search;
 mod sqlx;
 mod types;
 use api_event::metrics::{ApiEventMetric, ApiEventMetricRow};
-use common_utils::errors::CustomResult;
+use common_utils::{errors::CustomResult, types::TenantConfig};
 use disputes::metrics::{DisputeMetric, DisputeMetricRow};
 use enums::AuthInfo;
 use hyperswitch_interfaces::secrets_interface::{
@@ -34,7 +35,10 @@ pub use types::AnalyticsDomain;
 pub mod lambda_utils;
 pub mod utils;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use api_models::analytics::{
     active_payments::{ActivePaymentsMetrics, ActivePaymentsMetricsBucketIdentifier},
@@ -106,7 +110,7 @@ impl std::fmt::Display for AnalyticsProvider {
             Self::CombinedSqlx(_, _) => "CombinedSqlx",
         };
 
-        write!(f, "{}", analytics_provider)
+        write!(f, "{analytics_provider}")
     }
 }
 
@@ -429,6 +433,23 @@ impl AnalyticsProvider {
             self,
         )
         .await
+    }
+
+    pub async fn get_intent_status_with_count(
+        &self,
+        auth: &AuthInfo,
+        time_range: &TimeRange,
+    ) -> types::MetricsResult<HashMap<common_enums::IntentStatus, i64>> {
+        match self {
+            Self::Clickhouse(ckh_pool)
+            | Self::CombinedCkh(_, ckh_pool)
+            | Self::CombinedSqlx(_, ckh_pool) => {
+                payment_intents::aggregate::get_intent_status_with_count(ckh_pool, auth, time_range)
+                    .await
+            }
+            Self::Sqlx(_) => Err(report!(MetricsError::NotImplemented)
+                .attach_printable("ClickHouse aggregate not available: analytics source is sqlx")),
+        }
     }
 
     pub async fn get_refund_metrics(
@@ -911,7 +932,7 @@ impl AnalyticsProvider {
         &self,
         metric: &AuthEventMetrics,
         dimensions: &[AuthEventDimensions],
-        merchant_id: &common_utils::id_type::MerchantId,
+        auth: &AuthInfo,
         filters: &AuthEventFilters,
         granularity: Option<Granularity>,
         time_range: &TimeRange,
@@ -920,20 +941,13 @@ impl AnalyticsProvider {
             Self::Sqlx(_pool) => Err(report!(MetricsError::NotImplemented)),
             Self::Clickhouse(pool) => {
                 metric
-                    .load_metrics(
-                        merchant_id,
-                        dimensions,
-                        filters,
-                        granularity,
-                        time_range,
-                        pool,
-                    )
+                    .load_metrics(auth, dimensions, filters, granularity, time_range, pool)
                     .await
             }
             Self::CombinedCkh(_sqlx_pool, ckh_pool) | Self::CombinedSqlx(_sqlx_pool, ckh_pool) => {
                 metric
                     .load_metrics(
-                        merchant_id,
+                        auth,
                         dimensions,
                         filters,
                         granularity,
@@ -975,10 +989,7 @@ impl AnalyticsProvider {
         }
     }
 
-    pub async fn from_conf(
-        config: &AnalyticsConfig,
-        tenant: &dyn storage_impl::config::TenantConfig,
-    ) -> Self {
+    pub async fn from_conf(config: &AnalyticsConfig, tenant: &dyn TenantConfig) -> Self {
         match config {
             AnalyticsConfig::Sqlx { sqlx, .. } => {
                 Self::Sqlx(SqlxClient::from_conf(sqlx, tenant.get_schema()).await)
@@ -1010,25 +1021,28 @@ impl AnalyticsProvider {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
-#[serde(tag = "source")]
-#[serde(rename_all = "lowercase")]
+#[serde(tag = "source", rename_all = "lowercase")]
 pub enum AnalyticsConfig {
     Sqlx {
         sqlx: Database,
+        #[serde(default)]
         forex_enabled: bool,
     },
     Clickhouse {
         clickhouse: ClickhouseConfig,
+        #[serde(default)]
         forex_enabled: bool,
     },
     CombinedCkh {
         sqlx: Database,
         clickhouse: ClickhouseConfig,
+        #[serde(default)]
         forex_enabled: bool,
     },
     CombinedSqlx {
         sqlx: Database,
         clickhouse: ClickhouseConfig,
+        #[serde(default)]
         forex_enabled: bool,
     },
 }
@@ -1053,7 +1067,7 @@ impl SecretsHandler for AnalyticsConfig {
         let analytics_config = value.get_inner();
         let decrypted_password = match analytics_config {
             // Todo: Perform kms decryption of clickhouse password
-            Self::Clickhouse { .. } => masking::Secret::new(String::default()),
+            Self::Clickhouse { .. } => hyperswitch_masking::Secret::new(String::default()),
             Self::Sqlx { sqlx, .. }
             | Self::CombinedCkh { sqlx, .. }
             | Self::CombinedSqlx { sqlx, .. } => {
@@ -1124,6 +1138,8 @@ pub struct ReportConfig {
     pub refund_function: String,
     pub dispute_function: String,
     pub authentication_function: String,
+    pub payout_function: String,
+    pub relay_function: String,
     pub region: String,
 }
 
@@ -1136,6 +1152,7 @@ pub enum AnalyticsFlow {
     GetInfo,
     GetPaymentMetrics,
     GetPaymentIntentMetrics,
+    GetPaymentIntentsAggregate,
     GetRefundsMetrics,
     GetFrmMetrics,
     GetSdkMetrics,
@@ -1153,15 +1170,20 @@ pub enum AnalyticsFlow {
     GenerateDisputeReport,
     GenerateRefundReport,
     GenerateAuthenticationReport,
+    GeneratePayoutReport,
+    GenerateRelayReport,
     GetApiEventMetrics,
     GetApiEventFilters,
     GetConnectorEvents,
+    GetPrismConnectorEvents,
     GetOutgoingWebhookEvents,
     GetGlobalSearchResults,
     GetSearchResults,
     GetDisputeFilters,
     GetDisputeMetrics,
     GetSankey,
+    GetRoutingEvents,
+    GetPaymentListFromOpenSearch,
 }
 
 impl FlowMetric for AnalyticsFlow {}

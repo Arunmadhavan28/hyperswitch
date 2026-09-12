@@ -1,5 +1,7 @@
 pub mod transformers;
+use std::sync::LazyLock;
 
+use api_models::merchant_connector_webhook_management::ScopeIdentifier;
 use base64::Engine;
 use common_enums::enums::{self, PaymentMethodType};
 use common_utils::{
@@ -7,35 +9,52 @@ use common_utils::{
     errors::CustomResult,
     ext_traits::{ByteSliceExt, OptionExt},
     request::{Method, Request, RequestBuilder, RequestContent},
-    types::{AmountConvertor, MinorUnit, MinorUnitForConnector},
+    types::{
+        AmountConvertor, MinorUnit, MinorUnitForConnector, StringMinorUnit,
+        StringMinorUnitForConnector,
+    },
 };
 use error_stack::{report, ResultExt};
 use hyperswitch_domain_models::{
-    api::ApplicationResponse,
-    payment_method_data::PaymentMethodData,
+    api::WebhookResponse,
+    payment_method_data,
     router_data::{AccessToken, ConnectorAuthType, ErrorResponse, RouterData},
     router_flow_types::{
         access_token_auth::AccessTokenAuth,
+        merchant_connector_webhook_management::{
+            ConnectorWebhookGenerateSecret, ConnectorWebhookRegister,
+        },
         payments::{
-            Authorize, Capture, PSync, PaymentMethodToken, PreProcessing, Session, SetupMandate,
-            Void,
+            Authorize, Capture, ExtendAuthorization, PSync, PaymentMethodToken, PreProcessing,
+            Session, SetupMandate, Void,
         },
         refunds::{Execute, RSync},
-        Accept, Defend, Evidence, Retrieve, Upload,
+        Accept, Defend, Evidence, GiftCardBalanceCheck, Retrieve, Upload,
     },
     router_request_types::{
+        merchant_connector_webhook_management::{
+            ConnectorWebhookGenerateSecretRequest, ConnectorWebhookRegisterRequest,
+        },
         AcceptDisputeRequestData, AccessTokenRequestData, DefendDisputeRequestData,
-        PaymentMethodTokenizationData, PaymentsAuthorizeData, PaymentsCancelData,
-        PaymentsCaptureData, PaymentsPreProcessingData, PaymentsSessionData, PaymentsSyncData,
-        RefundsData, RetrieveFileRequestData, SetupMandateRequestData, SubmitEvidenceRequestData,
+        GiftCardBalanceCheckRequestData, PaymentMethodTokenizationData, PaymentsAuthorizeData,
+        PaymentsCancelData, PaymentsCaptureData, PaymentsExtendAuthorizationData,
+        PaymentsPreProcessingData, PaymentsSessionData, PaymentsSyncData, RefundsData,
+        RetrieveFileRequestData, SetupMandateRequestData, SubmitEvidenceRequestData,
         SyncRequestType, UploadFileRequestData,
     },
     router_response_types::{
-        AcceptDisputeResponse, DefendDisputeResponse, PaymentsResponseData, RefundsResponseData,
-        RetrieveFileResponse, SubmitEvidenceResponse, UploadFileResponse,
+        merchant_connector_webhook_management::{
+            ConnectorWebhookGenerateSecretResponse, ConnectorWebhookRegisterResponse,
+        },
+        AcceptDisputeResponse, ConnectorInfo, DefendDisputeResponse,
+        GiftCardBalanceCheckResponseData, PaymentMethodDetails, PaymentsResponseData,
+        RefundsResponseData, RetrieveFileResponse, SubmitEvidenceResponse, SupportedPaymentMethods,
+        SupportedPaymentMethodsExt, UploadFileResponse,
     },
     types::{
+        ConnectorWebhookGenerateSecretRouterData, ConnectorWebhookRegisterRouterData,
         PaymentsAuthorizeRouterData, PaymentsCancelRouterData, PaymentsCaptureRouterData,
+        PaymentsExtendAuthorizationRouterData, PaymentsGiftCardBalanceCheckRouterData,
         PaymentsPreProcessingRouterData, PaymentsSyncRouterData, RefundsRouterData,
         SetupMandateRouterData,
     },
@@ -56,20 +75,24 @@ use hyperswitch_interfaces::{
         disputes::{AcceptDispute, DefendDispute, Dispute, SubmitEvidence},
         files::{FilePurpose, FileUpload, RetrieveFile, UploadFile},
         CaptureSyncMethod, ConnectorCommon, ConnectorIntegration, ConnectorSpecifications,
-        ConnectorValidation,
+        ConnectorValidation, GenerateConnectorWebhookSecret, WebhookGenerateSecret,
+        WebhookRegister,
     },
     configs::Connectors,
     consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     disputes, errors,
     events::connector_api_logs::ConnectorEvent,
     types::{
-        AcceptDisputeType, DefendDisputeType, PaymentsAuthorizeType, PaymentsCaptureType,
-        PaymentsPreProcessingType, PaymentsSyncType, PaymentsVoidType, RefundExecuteType, Response,
-        SetupMandateType, SubmitEvidenceType,
+        AcceptDisputeType, ConnectorWebhookGenerateSecretType, ConnectorWebhookRegisterType,
+        DefendDisputeType, ExtendedAuthorizationType, PaymentsAuthorizeType, PaymentsCaptureType,
+        PaymentsGiftCardBalanceCheckType, PaymentsPreProcessingType, PaymentsSyncType,
+        PaymentsVoidType, RefundExecuteType, Response, SetupMandateType, SubmitEvidenceType,
     },
-    webhooks::{IncomingWebhook, IncomingWebhookFlowError, IncomingWebhookRequestDetails},
+    webhooks::{
+        IncomingWebhook, IncomingWebhookFlowError, IncomingWebhookRequestDetails, WebhookContext,
+    },
 };
-use masking::{ExposeInterface, Mask, Maskable, Secret};
+use hyperswitch_masking::{ExposeInterface, Mask, Maskable, Secret};
 use ring::hmac;
 use router_env::{instrument, tracing};
 use transformers as adyen;
@@ -84,22 +107,30 @@ use crate::{
         SubmitEvidenceRouterData,
     },
     utils::{
-        self as connector_utils, convert_payment_authorize_router_response,
-        convert_setup_mandate_router_data_to_authorize_router_data, is_mandate_supported,
-        ForeignTryFrom, PaymentMethodDataType,
+        convert_amount, convert_payment_authorize_router_response,
+        convert_setup_mandate_router_data_to_authorize_router_data, ForeignTryFrom,
     },
 };
 const ADYEN_API_VERSION: &str = "v68";
 
+const ADYEN_IMAGE_MAX_SIZE: i32 = 10_000_000;
+const ADYEN_PDF_MAX_SIZE: i32 = 2_000_000;
+const ADYEN_PDF_FORMAT: &str = "application/pdf";
+const ADYEN_SUPPORTED_DISPUTE_EVIDENCE_FILE_TYPES: [&str; 4] =
+    ["image/jpeg", "image/jpg", "image/tiff", ADYEN_PDF_FORMAT];
+const ADYEN_IMAGE_FILE_TYPES: [&str; 3] = ["image/jpeg", "image/jpg", "image/tiff"];
+
 #[derive(Clone)]
 pub struct Adyen {
     amount_converter: &'static (dyn AmountConvertor<Output = MinorUnit> + Sync),
+    amount_converter_webhooks: &'static (dyn AmountConvertor<Output = StringMinorUnit> + Sync),
 }
 
 impl Adyen {
     pub const fn new() -> &'static Self {
         &Self {
             amount_converter: &MinorUnitForConnector,
+            amount_converter_webhooks: &StringMinorUnitForConnector,
         }
     }
 }
@@ -130,24 +161,62 @@ impl ConnectorCommon for Adyen {
         res: Response,
         event_builder: Option<&mut ConnectorEvent>,
     ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
-        let response: adyen::AdyenErrorResponse = res
-            .response
-            .parse_struct("ErrorResponse")
-            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        if res.response.is_empty() {
+            Ok(ErrorResponse {
+                status_code: res.status_code,
+                code: NO_ERROR_CODE.to_string(),
+                message: NO_ERROR_MESSAGE.to_string(),
+                reason: None,
+                attempt_status: None,
+                connector_transaction_id: None,
+                connector_response_reference_id: None,
+                network_advice_code: None,
+                network_decline_code: None,
+                network_error_message: None,
+                connector_metadata: None,
+            })
+        } else {
+            let response: Result<
+                adyen::AdyenErrorResponse,
+                error_stack::Report<common_utils::errors::ParsingError>,
+            > = res.response.parse_struct("ErrorResponse");
 
-        event_builder.map(|i| i.set_error_response_body(&response));
-        router_env::logger::info!(connector_response=?response);
+            match response {
+                Ok(response) => {
+                    event_builder.map(|i| i.set_error_response_body(&response));
+                    router_env::logger::info!(connector_response=?response);
 
-        Ok(ErrorResponse {
-            status_code: res.status_code,
-            code: response.error_code,
-            message: response.message.to_owned(),
-            reason: Some(response.message),
-            attempt_status: None,
-            connector_transaction_id: response.psp_reference,
-            issuer_error_code: None,
-            issuer_error_message: None,
-        })
+                    let message = response
+                        .message
+                        .or(response.title)
+                        .unwrap_or_else(|| NO_ERROR_MESSAGE.to_string());
+
+                    Ok(ErrorResponse {
+                        status_code: res.status_code,
+                        code: response.error_code,
+                        message: message.clone(),
+                        reason: Some(message),
+                        attempt_status: None,
+                        connector_transaction_id: response.psp_reference,
+                        connector_response_reference_id: None,
+                        network_advice_code: None,
+                        network_decline_code: None,
+                        network_error_message: None,
+                        connector_metadata: None,
+                    })
+                }
+                Err(error_msg) => {
+                    event_builder.map(|event| {
+                        event.set_error(serde_json::json!({
+                            "error": res.response.escape_ascii().to_string(),
+                            "status_code": res.status_code,
+                        }))
+                    });
+                    router_env::logger::error!(deserialization_error =? error_msg);
+                    crate::utils::handle_json_response_deserialization_failure(res, "adyen")
+                }
+            }
+        }
     }
 }
 
@@ -162,6 +231,7 @@ impl ConnectorValidation for Adyen {
         let connector = self.id();
         match pmt {
             Some(payment_method_type) => match payment_method_type {
+                #[cfg(feature = "v1")]
                 PaymentMethodType::Affirm
                 | PaymentMethodType::AfterpayClearpay
                 | PaymentMethodType::ApplePay
@@ -186,6 +256,34 @@ impl ConnectorValidation for Adyen {
                         )
                     }
                 },
+                #[cfg(feature = "v2")]
+                PaymentMethodType::Affirm
+                | PaymentMethodType::AfterpayClearpay
+                | PaymentMethodType::ApplePay
+                | PaymentMethodType::Credit
+                | PaymentMethodType::Debit
+                | PaymentMethodType::Card
+                | PaymentMethodType::GooglePay
+                | PaymentMethodType::MobilePay
+                | PaymentMethodType::PayBright
+                | PaymentMethodType::Sepa
+                | PaymentMethodType::Vipps
+                | PaymentMethodType::Venmo
+                | PaymentMethodType::Skrill
+                | PaymentMethodType::Neteller
+                | PaymentMethodType::Paypal => match capture_method {
+                    enums::CaptureMethod::Automatic
+                    | enums::CaptureMethod::SequentialAutomatic
+                    | enums::CaptureMethod::Manual
+                    | enums::CaptureMethod::ManualMultiple => Ok(()),
+                    enums::CaptureMethod::Scheduled => {
+                        capture_method_not_supported!(
+                            connector,
+                            capture_method,
+                            payment_method_type
+                        )
+                    }
+                },
                 PaymentMethodType::Ach
                 | PaymentMethodType::SamsungPay
                 | PaymentMethodType::Paze
@@ -194,7 +292,8 @@ impl ConnectorValidation for Adyen {
                 | PaymentMethodType::Givex
                 | PaymentMethodType::Klarna
                 | PaymentMethodType::Twint
-                | PaymentMethodType::Walley => match capture_method {
+                | PaymentMethodType::Walley
+                | PaymentMethodType::Payjustnow => match capture_method {
                     enums::CaptureMethod::Automatic
                     | enums::CaptureMethod::Manual
                     | enums::CaptureMethod::SequentialAutomatic => Ok(()),
@@ -233,6 +332,9 @@ impl ConnectorValidation for Adyen {
                 | PaymentMethodType::Oxxo
                 | PaymentMethodType::PaySafeCard
                 | PaymentMethodType::Pix
+                | PaymentMethodType::PixKey
+                | PaymentMethodType::PixEmv
+                | PaymentMethodType::PixQr
                 | PaymentMethodType::Swish
                 | PaymentMethodType::TouchNGo
                 | PaymentMethodType::Trustly
@@ -253,6 +355,8 @@ impl ConnectorValidation for Adyen {
                 | PaymentMethodType::SevenEleven
                 | PaymentMethodType::OpenBankingUk
                 | PaymentMethodType::OnlineBankingCzechRepublic
+                | PaymentMethodType::Payshap
+                | PaymentMethodType::PayshapProxy
                 | PaymentMethodType::PermataBankTransfer => match capture_method {
                     enums::CaptureMethod::Automatic | enums::CaptureMethod::SequentialAutomatic => {
                         Ok(())
@@ -268,15 +372,21 @@ impl ConnectorValidation for Adyen {
                     }
                 },
                 PaymentMethodType::AmazonPay
+                | PaymentMethodType::Breadpay
+                | PaymentMethodType::Paysera
+                | PaymentMethodType::Skrill
+                | PaymentMethodType::Neteller
                 | PaymentMethodType::CardRedirect
                 | PaymentMethodType::DirectCarrierBilling
                 | PaymentMethodType::Fps
+                | PaymentMethodType::BhnCardNetwork
                 | PaymentMethodType::DuitNow
                 | PaymentMethodType::Interac
                 | PaymentMethodType::Multibanco
                 | PaymentMethodType::Przelewy24
                 | PaymentMethodType::Becs
                 | PaymentMethodType::Eft
+                | PaymentMethodType::EftDebitOrder
                 | PaymentMethodType::ClassicReward
                 | PaymentMethodType::Pse
                 | PaymentMethodType::LocalBankTransfer
@@ -292,10 +402,25 @@ impl ConnectorValidation for Adyen {
                 | PaymentMethodType::Cashapp
                 | PaymentMethodType::UpiCollect
                 | PaymentMethodType::UpiIntent
+                | PaymentMethodType::UpiQr
                 | PaymentMethodType::VietQr
                 | PaymentMethodType::Mifinity
                 | PaymentMethodType::LocalBankRedirect
-                | PaymentMethodType::OpenBankingPIS => {
+                | PaymentMethodType::OpenBankingPIS
+                | PaymentMethodType::InstantBankTransfer
+                | PaymentMethodType::InstantBankTransferFinland
+                | PaymentMethodType::InstantBankTransferPoland
+                | PaymentMethodType::IndonesianBankTransfer
+                | PaymentMethodType::Qris
+                | PaymentMethodType::SepaBankTransfer
+                | PaymentMethodType::Flexiti
+                | PaymentMethodType::RevolutPay
+                | PaymentMethodType::Bluecode
+                | PaymentMethodType::SepaGuarenteedDebit
+                | PaymentMethodType::OpenBanking
+                | PaymentMethodType::NetworkToken
+                | PaymentMethodType::PixAutomaticoPush
+                | PaymentMethodType::PixAutomaticoQr => {
                     capture_method_not_supported!(connector, capture_method, payment_method_type)
                 }
             },
@@ -310,34 +435,6 @@ impl ConnectorValidation for Adyen {
             },
         }
     }
-    fn validate_mandate_payment(
-        &self,
-        pm_type: Option<PaymentMethodType>,
-        pm_data: PaymentMethodData,
-    ) -> CustomResult<(), errors::ConnectorError> {
-        let mandate_supported_pmd = std::collections::HashSet::from([
-            PaymentMethodDataType::Card,
-            PaymentMethodDataType::ApplePay,
-            PaymentMethodDataType::GooglePay,
-            PaymentMethodDataType::PaypalRedirect,
-            PaymentMethodDataType::MomoRedirect,
-            PaymentMethodDataType::KakaoPayRedirect,
-            PaymentMethodDataType::GoPayRedirect,
-            PaymentMethodDataType::GcashRedirect,
-            PaymentMethodDataType::DanaRedirect,
-            PaymentMethodDataType::TwintRedirect,
-            PaymentMethodDataType::VippsRedirect,
-            PaymentMethodDataType::KlarnaRedirect,
-            PaymentMethodDataType::Ideal,
-            PaymentMethodDataType::OpenBankingUk,
-            PaymentMethodDataType::Trustly,
-            PaymentMethodDataType::BancontactCard,
-            PaymentMethodDataType::AchBankDebit,
-            PaymentMethodDataType::SepaBankDebit,
-            PaymentMethodDataType::BecsBankDebit,
-        ]);
-        is_mandate_supported(pm_data, pm_type, mandate_supported_pmd, self.id())
-    }
 
     fn validate_psync_reference_id(
         &self,
@@ -350,7 +447,7 @@ impl ConnectorValidation for Adyen {
             return Ok(());
         }
         Err(errors::ConnectorError::MissingRequiredField {
-            field_name: "encoded_data",
+            field_name: "encoded_data".into(),
         }
         .into())
     }
@@ -367,6 +464,7 @@ impl api::PaymentCapture for Adyen {}
 impl api::MandateSetup for Adyen {}
 impl api::ConnectorAccessToken for Adyen {}
 impl api::PaymentToken for Adyen {}
+impl api::PaymentsGiftCardBalanceCheck for Adyen {}
 
 impl ConnectorIntegration<PaymentMethodToken, PaymentMethodTokenizationData, PaymentsResponseData>
     for Adyen
@@ -422,7 +520,7 @@ impl ConnectorIntegration<SetupMandate, SetupMandateRequestData, PaymentsRespons
             req.test_mode,
             &req.connector_meta_data,
         )?;
-        Ok(format!("{}{}/payments", endpoint, ADYEN_API_VERSION))
+        Ok(format!("{endpoint}{ADYEN_API_VERSION}/payments"))
     }
     fn get_request_body(
         &self,
@@ -434,7 +532,7 @@ impl ConnectorIntegration<SetupMandate, SetupMandateRequestData, PaymentsRespons
             convert_setup_mandate_router_data_to_authorize_router_data(req),
         ));
 
-        let amount = connector_utils::convert_amount(
+        let amount = convert_amount(
             self.amount_converter,
             authorize_req.request.minor_amount,
             authorize_req.request.currency,
@@ -542,8 +640,7 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}{}/payments/{}/captures",
-            endpoint, ADYEN_API_VERSION, id
+            "{endpoint}{ADYEN_API_VERSION}/payments/{id}/captures",
         ))
     }
     fn get_request_body(
@@ -551,7 +648,7 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         req: &PaymentsCaptureRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let amount_to_capture = connector_utils::convert_amount(
+        let amount_to_capture = convert_amount(
             self.amount_converter,
             req.request.minor_amount_to_capture,
             req.request.currency,
@@ -675,7 +772,6 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Ady
                 }),
             },
         };
-
         Ok(RequestContent::Json(Box::new(connector_req)))
     }
 
@@ -689,10 +785,7 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Ady
             req.test_mode,
             &req.connector_meta_data,
         )?;
-        Ok(format!(
-            "{}{}/payments/details",
-            endpoint, ADYEN_API_VERSION
-        ))
+        Ok(format!("{endpoint}{ADYEN_API_VERSION}/payments/details"))
     }
 
     fn build_request(
@@ -809,7 +902,7 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
             req.test_mode,
             &req.connector_meta_data,
         )?;
-        Ok(format!("{}{}/payments", endpoint, ADYEN_API_VERSION))
+        Ok(format!("{endpoint}{ADYEN_API_VERSION}/payments"))
     }
 
     fn get_request_body(
@@ -817,7 +910,7 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         req: &PaymentsAuthorizeRouterData,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let amount = connector_utils::convert_amount(
+        let amount = convert_amount(
             self.amount_converter,
             req.request.minor_amount,
             req.request.currency,
@@ -919,8 +1012,7 @@ impl ConnectorIntegration<PreProcessing, PaymentsPreProcessingData, PaymentsResp
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}{}/paymentMethods/balance",
-            endpoint, ADYEN_API_VERSION
+            "{endpoint}{ADYEN_API_VERSION}/paymentMethods/balance",
         ))
     }
 
@@ -970,17 +1062,12 @@ impl ConnectorIntegration<PreProcessing, PaymentsPreProcessingData, PaymentsResp
         let currency = match data.request.currency {
             Some(currency) => currency,
             None => Err(errors::ConnectorError::MissingRequiredField {
-                field_name: "currency",
+                field_name: "currency".into(),
             })?,
         };
-        let amount = match data.request.minor_amount {
-            Some(amount) => amount,
-            None => Err(errors::ConnectorError::MissingRequiredField {
-                field_name: "amount",
-            })?,
-        };
+        let amount = data.request.minor_amount;
 
-        let amount = connector_utils::convert_amount(self.amount_converter, amount, currency)?;
+        let amount = convert_amount(self.amount_converter, amount, currency)?;
 
         if response.balance.currency != currency || response.balance.value < amount {
             Ok(RouterData {
@@ -991,8 +1078,11 @@ impl ConnectorIntegration<PreProcessing, PaymentsPreProcessingData, PaymentsResp
                     status_code: res.status_code,
                     attempt_status: Some(enums::AttemptStatus::Failure),
                     connector_transaction_id: Some(response.psp_reference),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..data.clone()
             })
@@ -1053,8 +1143,7 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for Ad
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}{}/payments/{}/cancels",
-            endpoint, ADYEN_API_VERSION, id
+            "{endpoint}{ADYEN_API_VERSION}/payments/{id}/cancels",
         ))
     }
 
@@ -1119,6 +1208,140 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for Ad
     }
 }
 
+impl
+    ConnectorIntegration<
+        GiftCardBalanceCheck,
+        GiftCardBalanceCheckRequestData,
+        GiftCardBalanceCheckResponseData,
+    > for Adyen
+{
+    fn get_headers(
+        &self,
+        req: &PaymentsGiftCardBalanceCheckRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+        let mut header = vec![(
+            headers::CONTENT_TYPE.to_string(),
+            PaymentsGiftCardBalanceCheckType::get_content_type(self)
+                .to_string()
+                .into(),
+        )];
+        let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
+        header.append(&mut api_key);
+        Ok(header)
+    }
+
+    fn get_url(
+        &self,
+        req: &PaymentsGiftCardBalanceCheckRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        let endpoint = build_env_specific_endpoint(
+            self.base_url(connectors),
+            req.test_mode,
+            &req.connector_meta_data,
+        )?;
+        Ok(format!(
+            "{endpoint}{ADYEN_API_VERSION}/paymentMethods/balance",
+        ))
+    }
+
+    fn get_request_body(
+        &self,
+        req: &PaymentsGiftCardBalanceCheckRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<RequestContent, errors::ConnectorError> {
+        let connector_req = adyen::AdyenBalanceRequest::try_from(req)?;
+        Ok(RequestContent::Json(Box::new(connector_req)))
+    }
+
+    fn build_request(
+        &self,
+        req: &PaymentsGiftCardBalanceCheckRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        Ok(Some(
+            RequestBuilder::new()
+                .method(Method::Post)
+                .url(&PaymentsGiftCardBalanceCheckType::get_url(
+                    self, req, connectors,
+                )?)
+                .attach_default_headers()
+                .headers(PaymentsGiftCardBalanceCheckType::get_headers(
+                    self, req, connectors,
+                )?)
+                .set_body(PaymentsGiftCardBalanceCheckType::get_request_body(
+                    self, req, connectors,
+                )?)
+                .build(),
+        ))
+    }
+
+    fn handle_response(
+        &self,
+        data: &PaymentsGiftCardBalanceCheckRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<PaymentsGiftCardBalanceCheckRouterData, errors::ConnectorError> {
+        let response: adyen::AdyenBalanceResponse = res
+            .response
+            .parse_struct("AdyenBalanceResponse")
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+
+        let currency = data
+            .request
+            .currency
+            .get_required_value("currency")
+            .change_context(errors::ConnectorError::MissingRequiredField {
+                field_name: "currency".into(),
+            })?;
+
+        if response.balance.currency != currency {
+            Ok(RouterData {
+                response: Err(ErrorResponse {
+                    code: NO_ERROR_CODE.to_string(),
+                    message: NO_ERROR_MESSAGE.to_string(),
+                    reason: Some(constants::MISMATCHED_CURRENCY.to_string()),
+                    status_code: res.status_code,
+                    attempt_status: Some(enums::AttemptStatus::Failure),
+                    connector_transaction_id: Some(response.psp_reference),
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
+                }),
+                ..data.clone()
+            })
+        } else {
+            RouterData::try_from(ResponseRouterData {
+                response,
+                data: data.clone(),
+                http_code: res.status_code,
+            })
+            .change_context(errors::ConnectorError::ResponseHandlingFailed)
+        }
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+
+    fn get_5xx_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
 impl api::Payouts for Adyen {}
 #[cfg(feature = "payouts")]
 impl api::PayoutCancel for Adyen {}
@@ -1142,8 +1365,7 @@ impl ConnectorIntegration<PoCancel, PayoutsData, PayoutsResponseData> for Adyen 
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}pal/servlet/Payout/{}/declineThirdParty",
-            endpoint, ADYEN_API_VERSION
+            "{endpoint}pal/servlet/Payout/{ADYEN_API_VERSION}/declineThirdParty",
         ))
     }
 
@@ -1240,8 +1462,7 @@ impl ConnectorIntegration<PoCreate, PayoutsData, PayoutsResponseData> for Adyen 
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}pal/servlet/Payout/{}/storeDetailAndSubmitThirdParty",
-            endpoint, ADYEN_API_VERSION
+            "{endpoint}pal/servlet/Payout/{ADYEN_API_VERSION}/storeDetailAndSubmitThirdParty",
         ))
     }
 
@@ -1264,7 +1485,7 @@ impl ConnectorIntegration<PoCreate, PayoutsData, PayoutsResponseData> for Adyen 
         req: &PayoutsRouterData<PoCreate>,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let amount = connector_utils::convert_amount(
+        let amount = convert_amount(
             self.amount_converter,
             req.request.minor_amount,
             req.request.destination_currency,
@@ -1338,7 +1559,7 @@ impl ConnectorIntegration<PoEligibility, PayoutsData, PayoutsResponseData> for A
             req.test_mode,
             &req.connector_meta_data,
         )?;
-        Ok(format!("{}{}/payments", endpoint, ADYEN_API_VERSION))
+        Ok(format!("{endpoint}{ADYEN_API_VERSION}/payments"))
     }
 
     fn get_headers(
@@ -1362,7 +1583,7 @@ impl ConnectorIntegration<PoEligibility, PayoutsData, PayoutsResponseData> for A
         req: &PayoutsRouterData<PoEligibility>,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let amount = connector_utils::convert_amount(
+        let amount = convert_amount(
             self.amount_converter,
             req.request.minor_amount,
             req.request.destination_currency,
@@ -1427,6 +1648,111 @@ impl ConnectorIntegration<PoEligibility, PayoutsData, PayoutsResponseData> for A
     }
 }
 
+impl api::PaymentExtendAuthorization for Adyen {}
+impl
+    ConnectorIntegration<ExtendAuthorization, PaymentsExtendAuthorizationData, PaymentsResponseData>
+    for Adyen
+{
+    fn get_headers(
+        &self,
+        req: &PaymentsExtendAuthorizationRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+        let mut header = vec![(
+            headers::CONTENT_TYPE.to_string(),
+            self.common_get_content_type().to_string().into(),
+        )];
+        let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
+        header.append(&mut api_key);
+        Ok(header)
+    }
+
+    fn get_content_type(&self) -> &'static str {
+        self.common_get_content_type()
+    }
+
+    fn get_url(
+        &self,
+        req: &PaymentsExtendAuthorizationRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        let id = req.request.connector_transaction_id.as_str();
+        let endpoint = build_env_specific_endpoint(
+            self.base_url(connectors),
+            req.test_mode,
+            &req.connector_meta_data,
+        )?;
+        Ok(format!(
+            "{endpoint}{ADYEN_API_VERSION}/payments/{id}/amountUpdates"
+        ))
+    }
+
+    fn get_request_body(
+        &self,
+        req: &PaymentsExtendAuthorizationRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<RequestContent, errors::ConnectorError> {
+        let amount = convert_amount(
+            self.amount_converter,
+            req.request.minor_amount,
+            req.request.currency,
+        )?;
+
+        let connector_router_data = adyen::AdyenRouterData::try_from((amount, req))?;
+        let connector_req =
+            adyen::AdyenExtendAuthorizationRequest::try_from(&connector_router_data)?;
+        Ok(RequestContent::Json(Box::new(connector_req)))
+    }
+
+    fn build_request(
+        &self,
+        req: &PaymentsExtendAuthorizationRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        Ok(Some(
+            RequestBuilder::new()
+                .method(Method::Post)
+                .url(&ExtendedAuthorizationType::get_url(self, req, connectors)?)
+                .attach_default_headers()
+                .headers(ExtendedAuthorizationType::get_headers(
+                    self, req, connectors,
+                )?)
+                .set_body(ExtendedAuthorizationType::get_request_body(
+                    self, req, connectors,
+                )?)
+                .build(),
+        ))
+    }
+
+    fn handle_response(
+        &self,
+        data: &PaymentsExtendAuthorizationRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<PaymentsExtendAuthorizationRouterData, errors::ConnectorError> {
+        let response: adyen::AdyenExtendAuthorizationResponse = res
+            .response
+            .parse_struct("Adyen AdyenExtendAuthorizationResponse")
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+        RouterData::try_from(ResponseRouterData {
+            response,
+            data: data.clone(),
+            http_code: res.status_code,
+        })
+        .change_context(errors::ConnectorError::ResponseHandlingFailed)
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
 #[cfg(feature = "payouts")]
 impl ConnectorIntegration<PoFulfill, PayoutsData, PayoutsResponseData> for Adyen {
     fn get_url(
@@ -1440,15 +1766,19 @@ impl ConnectorIntegration<PoFulfill, PayoutsData, PayoutsResponseData> for Adyen
             &req.connector_meta_data,
         )?;
         let payout_type = req.request.get_payout_type()?;
+        let path_segment = match payout_type {
+            enums::PayoutType::Bank | enums::PayoutType::Wallet => "confirmThirdParty",
+            enums::PayoutType::Card => "payout",
+            enums::PayoutType::BankRedirect => {
+                return Err(errors::ConnectorError::NotImplemented(
+                    "bank redirect payouts not supoorted by adyen".to_string(),
+                )
+                .into())
+            }
+        };
         Ok(format!(
             "{}pal/servlet/Payout/{}/{}",
-            endpoint,
-            ADYEN_API_VERSION,
-            match payout_type {
-                enums::PayoutType::Bank | enums::PayoutType::Wallet =>
-                    "confirmThirdParty".to_string(),
-                enums::PayoutType::Card => "payout".to_string(),
-            }
+            endpoint, ADYEN_API_VERSION, path_segment
         ))
     }
 
@@ -1469,12 +1799,14 @@ impl ConnectorIntegration<PoFulfill, PayoutsData, PayoutsResponseData> for Adyen
             .to_owned()
             .get_required_value("payout_type")
             .change_context(errors::ConnectorError::MissingRequiredField {
-                field_name: "payout_type",
+                field_name: "payout_type".into(),
             })?;
         let mut api_key = vec![(
             headers::X_API_KEY.to_string(),
             match payout_type {
-                enums::PayoutType::Bank | enums::PayoutType::Wallet => {
+                enums::PayoutType::Bank
+                | enums::PayoutType::Wallet
+                | enums::PayoutType::BankRedirect => {
                     auth.review_key.unwrap_or(auth.api_key).into_masked()
                 }
                 enums::PayoutType::Card => auth.api_key.into_masked(),
@@ -1489,7 +1821,7 @@ impl ConnectorIntegration<PoFulfill, PayoutsData, PayoutsResponseData> for Adyen
         req: &PayoutsRouterData<PoFulfill>,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let amount = connector_utils::convert_amount(
+        let amount = convert_amount(
             self.amount_converter,
             req.request.minor_amount,
             req.request.destination_currency,
@@ -1584,8 +1916,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Adyen {
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}{}/payments/{}/refunds",
-            endpoint, ADYEN_API_VERSION, connector_payment_id
+            "{endpoint}{ADYEN_API_VERSION}/payments/{connector_payment_id}/refunds",
         ))
     }
 
@@ -1594,7 +1925,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Adyen {
         req: &RefundsRouterData<Execute>,
         _connectors: &Connectors,
     ) -> CustomResult<RequestContent, errors::ConnectorError> {
-        let refund_amount = connector_utils::convert_amount(
+        let refund_amount = convert_amount(
             self.amount_converter,
             req.request.minor_refund_amount,
             req.request.currency,
@@ -1658,7 +1989,15 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Adyen {
     }
 }
 
-impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Adyen {}
+impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Adyen {
+    fn build_request(
+        &self,
+        _req: &RefundsRouterData<RSync>,
+        _connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        Err(errors::ConnectorError::NotImplemented("Refund Sync flow".to_string()).into())
+    }
+}
 
 fn get_webhook_object_from_body(
     body: &[u8],
@@ -1766,7 +2105,7 @@ impl IncomingWebhook for Adyen {
         let notif = get_webhook_object_from_body(request.body)
             .change_context(errors::ConnectorError::WebhookReferenceIdNotFound)?;
         // for capture_event, original_reference field will have the authorized payment's PSP reference
-        if adyen::is_capture_or_cancel_event(&notif.event_code) {
+        if adyen::is_capture_or_cancel_or_adjust_event(&notif.event_code) {
             return Ok(api_models::webhooks::ObjectReferenceId::PaymentId(
                 api_models::payments::PaymentIdType::ConnectorTransactionId(
                     notif
@@ -1806,9 +2145,15 @@ impl IncomingWebhook for Adyen {
     fn get_webhook_event_type(
         &self,
         request: &IncomingWebhookRequestDetails<'_>,
+        _context: Option<&WebhookContext>,
     ) -> CustomResult<api_models::webhooks::IncomingWebhookEvent, errors::ConnectorError> {
+        if request.body.is_empty() {
+            return Ok(api_models::webhooks::IncomingWebhookEvent::EndpointVerification);
+        }
+
         let notif = get_webhook_object_from_body(request.body)
-            .change_context(errors::ConnectorError::WebhookEventTypeNotFound)?;
+            .change_context(errors::ConnectorError::WebhookResponseEncodingFailed)?;
+
         Ok(transformers::get_adyen_webhook_event(
             notif.event_code,
             notif.success,
@@ -1819,9 +2164,10 @@ impl IncomingWebhook for Adyen {
     fn get_webhook_resource_object(
         &self,
         request: &IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let notif = get_webhook_object_from_body(request.body)
-            .change_context(errors::ConnectorError::WebhookEventTypeNotFound)?;
+            .change_context(errors::ConnectorError::WebhookResponseEncodingFailed)?;
 
         let response = adyen::AdyenWebhookResponse::from(notif);
 
@@ -1832,18 +2178,28 @@ impl IncomingWebhook for Adyen {
         &self,
         _request: &IncomingWebhookRequestDetails<'_>,
         _error_kind: Option<IncomingWebhookFlowError>,
-    ) -> CustomResult<ApplicationResponse<serde_json::Value>, errors::ConnectorError> {
-        Ok(ApplicationResponse::TextPlain("[accepted]".to_string()))
+        _connector_authentication_type: Option<
+            common_utils::crypto::Encryptable<Secret<serde_json::Value>>,
+        >,
+    ) -> CustomResult<WebhookResponse<serde_json::Value>, errors::ConnectorError> {
+        Ok(WebhookResponse::TextPlain("[accepted]".to_string()))
     }
 
     fn get_dispute_details(
         &self,
         request: &IncomingWebhookRequestDetails<'_>,
+        _context: Option<&WebhookContext>,
     ) -> CustomResult<disputes::DisputePayload, errors::ConnectorError> {
         let notif = get_webhook_object_from_body(request.body)
             .change_context(errors::ConnectorError::WebhookBodyDecodingFailed)?;
+
+        let amount = convert_amount(
+            self.amount_converter_webhooks,
+            notif.amount.value,
+            notif.amount.currency,
+        )?;
         Ok(disputes::DisputePayload {
-            amount: notif.amount.value.to_string(),
+            amount,
             currency: notif.amount.currency,
             dispute_stage: api_models::enums::DisputeStage::from(notif.event_code.clone()),
             connector_dispute_id: notif.psp_reference,
@@ -1897,8 +2253,53 @@ impl IncomingWebhook for Adyen {
                 });
         Ok(optional_network_txn_id)
     }
-}
 
+    #[cfg(feature = "v1")]
+    fn get_additional_payment_method_data(
+        &self,
+        request: &IncomingWebhookRequestDetails<'_>,
+    ) -> CustomResult<
+        Option<api_models::payment_methods::PaymentMethodUpdate>,
+        errors::ConnectorError,
+    > {
+        let notif = get_webhook_object_from_body(request.body)
+            .change_context(errors::ConnectorError::WebhookBodyDecodingFailed)?;
+
+        let expiry = notif
+            .additional_data
+            .expiry_date
+            .map(|date| transformers::CardExpiry::parse(&date.expose()))
+            .transpose()?
+            .ok_or(errors::ConnectorError::ParsingFailed)?;
+
+        let month_str = expiry.month();
+        let year_str = expiry.year();
+
+        Ok(Some(api_models::payment_methods::PaymentMethodUpdate {
+            card: Some(api_models::payment_methods::CardDetailUpdate {
+                card_exp_month: Some(month_str),
+                card_exp_year: Some(year_str),
+                card_holder_name: None,
+                nick_name: None,
+                issuer_country: notif.additional_data.card_issuing_country.clone(),
+                issuer_country_code: None,
+                card_issuer: notif.additional_data.card_issuing_bank.clone(),
+                last4_digits: notif
+                    .additional_data
+                    .card_summary
+                    .map(|last4| last4.expose().to_string()),
+                card_network: adyen::from_payment_method_variant(
+                    notif
+                        .additional_data
+                        .payment_method_variant
+                        .map(|network| network.expose()),
+                ),
+            }),
+            wallet: None,
+            client_secret: None,
+        }))
+    }
+}
 impl Dispute for Adyen {}
 impl DefendDispute for Adyen {}
 impl AcceptDispute for Adyen {}
@@ -1930,8 +2331,7 @@ impl ConnectorIntegration<Accept, AcceptDisputeRequestData, AcceptDisputeRespons
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}ca/services/DisputeService/v30/acceptDispute",
-            endpoint
+            "{endpoint}ca/services/DisputeService/v30/acceptDispute",
         ))
     }
 
@@ -1969,6 +2369,7 @@ impl ConnectorIntegration<Accept, AcceptDisputeRequestData, AcceptDisputeRespons
             .response
             .parse_struct("AdyenDisputeResponse")
             .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+
         RouterData::foreign_try_from((data, response))
             .change_context(errors::ConnectorError::ResponseHandlingFailed)
     }
@@ -2008,8 +2409,7 @@ impl ConnectorIntegration<Defend, DefendDisputeRequestData, DefendDisputeRespons
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}ca/services/DisputeService/v30/defendDispute",
-            endpoint
+            "{endpoint}ca/services/DisputeService/v30/defendDispute",
         ))
     }
 
@@ -2048,7 +2448,7 @@ impl ConnectorIntegration<Defend, DefendDisputeRequestData, DefendDisputeRespons
             .response
             .parse_struct("AdyenDisputeResponse")
             .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
-        RouterData::foreign_try_from((data, response))
+        RouterData::foreign_try_from((data, res, response))
             .change_context(errors::ConnectorError::ResponseHandlingFailed)
     }
 
@@ -2089,8 +2489,7 @@ impl ConnectorIntegration<Evidence, SubmitEvidenceRequestData, SubmitEvidenceRes
             &req.connector_meta_data,
         )?;
         Ok(format!(
-            "{}ca/services/DisputeService/v30/supplyDefenseDocument",
-            endpoint
+            "{endpoint}ca/services/DisputeService/v30/supplyDefenseDocument",
         ))
     }
 
@@ -2154,28 +2553,24 @@ impl FileUpload for Adyen {
     ) -> CustomResult<(), errors::ConnectorError> {
         match purpose {
             FilePurpose::DisputeEvidence => {
-                let supported_file_types =
-                    ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
-                if !supported_file_types.contains(&file_type.to_string().as_str()) {
+                let file_type_str = file_type.to_string();
+                if !ADYEN_SUPPORTED_DISPUTE_EVIDENCE_FILE_TYPES.contains(&file_type_str.as_str()) {
                     Err(errors::ConnectorError::FileValidationFailed {
-                        reason: "file_type does not match JPEG, JPG, PNG, or PDF format".to_owned(),
+                        reason: "file_type does not match JPEG, JPG, TIFF, or PDF format"
+                            .to_owned(),
                     })?
                 }
-                //10 MB
-                if (file_type.to_string().as_str() == "image/jpeg"
-                    || file_type.to_string().as_str() == "image/jpg"
-                    || file_type.to_string().as_str() == "image/png")
-                    && file_size > 10000000
+                if ADYEN_IMAGE_FILE_TYPES.contains(&file_type_str.as_str())
+                    && file_size > ADYEN_IMAGE_MAX_SIZE
                 {
                     Err(errors::ConnectorError::FileValidationFailed {
                         reason: "file_size exceeded the max file size of 10MB for Image formats"
                             .to_owned(),
                     })?
                 }
-                //2 MB
-                if file_type.to_string().as_str() == "application/pdf" && file_size > 2000000 {
+                if file_type_str.as_str() == ADYEN_PDF_FORMAT && file_size > ADYEN_PDF_MAX_SIZE {
                     Err(errors::ConnectorError::FileValidationFailed {
-                        reason: "file_size exceeded the max file size of 2MB for PDF formats"
+                        reason: "file_size exceeded the max file size of 2MB for PDF format"
                             .to_owned(),
                     })?
                 }
@@ -2185,4 +2580,1056 @@ impl FileUpload for Adyen {
     }
 }
 
-impl ConnectorSpecifications for Adyen {}
+impl WebhookRegister for Adyen {
+    fn requires_webhook_secret_generation(&self) -> bool {
+        true
+    }
+}
+
+impl
+    ConnectorIntegration<
+        ConnectorWebhookRegister,
+        ConnectorWebhookRegisterRequest,
+        ConnectorWebhookRegisterResponse,
+    > for Adyen
+{
+    fn get_headers(
+        &self,
+        req: &ConnectorWebhookRegisterRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+        let mut header = vec![(
+            headers::CONTENT_TYPE.to_string(),
+            ConnectorWebhookRegisterType::get_content_type(self)
+                .to_string()
+                .into(),
+        )];
+        let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
+        header.append(&mut api_key);
+        Ok(header)
+    }
+
+    fn get_url(
+        &self,
+        req: &ConnectorWebhookRegisterRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        let auth = adyen::AdyenAuthType::try_from(&req.connector_auth_type)
+            .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
+        let merchant_id = auth.merchant_account.expose();
+        let base_url = req.request.base_url.to_string();
+        Ok(base_url
+            .replace("{merchantId}", &merchant_id)
+            .replace("%7BmerchantId%7D", &merchant_id))
+    }
+
+    fn get_request_body(
+        &self,
+        req: &ConnectorWebhookRegisterRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<RequestContent, errors::ConnectorError> {
+        let connector_req = adyen::WebhookRegister::try_from(req)?;
+        Ok(RequestContent::Json(Box::new(connector_req)))
+    }
+
+    fn build_request(
+        &self,
+        req: &ConnectorWebhookRegisterRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        let request = RequestBuilder::new()
+            .method(Method::Post)
+            .url(&ConnectorWebhookRegisterType::get_url(
+                self, req, connectors,
+            )?)
+            .attach_default_headers()
+            .headers(ConnectorWebhookRegisterType::get_headers(
+                self, req, connectors,
+            )?)
+            .set_body(ConnectorWebhookRegisterType::get_request_body(
+                self, req, connectors,
+            )?)
+            .build();
+        Ok(Some(request))
+    }
+
+    fn handle_response(
+        &self,
+        data: &ConnectorWebhookRegisterRouterData,
+        event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<ConnectorWebhookRegisterRouterData, errors::ConnectorError> {
+        let response: adyen::AdyenWebhookRegisterResponse = res
+            .response
+            .parse_struct("AdyenWebhookRegisterResponse")
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        event_builder.map(|i| i.set_response_body(&response));
+        router_env::logger::info!(connector_response=?response);
+        RouterData::try_from(ResponseRouterData {
+            response,
+            data: data.clone(),
+            http_code: res.status_code,
+        })
+        .change_context(errors::ConnectorError::ResponseHandlingFailed)
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
+impl WebhookGenerateSecret for Adyen {}
+impl GenerateConnectorWebhookSecret for Adyen {}
+impl
+    ConnectorIntegration<
+        ConnectorWebhookGenerateSecret,
+        ConnectorWebhookGenerateSecretRequest,
+        ConnectorWebhookGenerateSecretResponse,
+    > for Adyen
+{
+    fn get_headers(
+        &self,
+        req: &ConnectorWebhookGenerateSecretRouterData,
+        _connectors: &Connectors,
+    ) -> CustomResult<Vec<(String, Maskable<String>)>, errors::ConnectorError> {
+        let mut header = vec![(
+            headers::CONTENT_TYPE.to_string(),
+            ConnectorWebhookGenerateSecretType::get_content_type(self)
+                .to_string()
+                .into(),
+        )];
+        let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
+        header.append(&mut api_key);
+        Ok(header)
+    }
+
+    fn get_content_type(&self) -> &'static str {
+        self.common_get_content_type()
+    }
+
+    fn get_url(
+        &self,
+        req: &ConnectorWebhookGenerateSecretRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<String, errors::ConnectorError> {
+        let endpoint = connectors.adyen.management_base_url.as_str();
+        let auth = adyen::AdyenAuthType::try_from(&req.connector_auth_type)
+            .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
+        let merchant_id = auth.merchant_account.expose();
+        let webhook_id = &req.request.connector_webhook_id;
+        Ok(format!(
+            "{endpoint}v3/merchants/{merchant_id}/webhooks/{webhook_id}/generateHmac",
+        ))
+    }
+
+    fn build_request(
+        &self,
+        req: &ConnectorWebhookGenerateSecretRouterData,
+        connectors: &Connectors,
+    ) -> CustomResult<Option<Request>, errors::ConnectorError> {
+        let request = RequestBuilder::new()
+            .method(Method::Post)
+            .url(&ConnectorWebhookGenerateSecretType::get_url(
+                self, req, connectors,
+            )?)
+            .attach_default_headers()
+            .headers(ConnectorWebhookGenerateSecretType::get_headers(
+                self, req, connectors,
+            )?)
+            .build();
+        Ok(Some(request))
+    }
+
+    fn handle_response(
+        &self,
+        data: &ConnectorWebhookGenerateSecretRouterData,
+        _event_builder: Option<&mut ConnectorEvent>,
+        res: Response,
+    ) -> CustomResult<ConnectorWebhookGenerateSecretRouterData, errors::ConnectorError> {
+        let response: adyen::AdyenGenerateHmacResponse = res
+            .response
+            .parse_struct("AdyenGenerateHmacResponse")
+            .change_context(errors::ConnectorError::ResponseDeserializationFailed)?;
+        RouterData::try_from(ResponseRouterData {
+            response,
+            data: data.clone(),
+            http_code: res.status_code,
+        })
+        .change_context(errors::ConnectorError::ResponseHandlingFailed)
+    }
+
+    fn get_error_response(
+        &self,
+        res: Response,
+        event_builder: Option<&mut ConnectorEvent>,
+    ) -> CustomResult<ErrorResponse, errors::ConnectorError> {
+        self.build_error_response(res, event_builder)
+    }
+}
+
+static ADYEN_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> = LazyLock::new(|| {
+    let supported_capture_methods1 = vec![
+        enums::CaptureMethod::Automatic,
+        enums::CaptureMethod::Manual,
+        enums::CaptureMethod::SequentialAutomatic,
+        enums::CaptureMethod::ManualMultiple,
+    ];
+
+    let supported_capture_methods2 = vec![
+        enums::CaptureMethod::Automatic,
+        enums::CaptureMethod::Manual,
+        enums::CaptureMethod::SequentialAutomatic,
+    ];
+
+    let supported_capture_methods3 = vec![
+        enums::CaptureMethod::Automatic,
+        enums::CaptureMethod::SequentialAutomatic,
+    ];
+
+    let supported_card_network = vec![
+        common_enums::CardNetwork::AmericanExpress,
+        common_enums::CardNetwork::CartesBancaires,
+        common_enums::CardNetwork::UnionPay,
+        common_enums::CardNetwork::DinersClub,
+        common_enums::CardNetwork::Discover,
+        common_enums::CardNetwork::Interac,
+        common_enums::CardNetwork::JCB,
+        common_enums::CardNetwork::Maestro,
+        common_enums::CardNetwork::Mastercard,
+        common_enums::CardNetwork::Visa,
+    ];
+
+    let mut adyen_supported_payment_methods = SupportedPaymentMethods::new();
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Card,
+        PaymentMethodType::Credit,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::Supported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Card,
+        PaymentMethodType::Debit,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: Some(
+                api_models::feature_matrix::PaymentMethodSpecificFeatures::Card({
+                    api_models::feature_matrix::CardSpecificFeatures {
+                        three_ds: common_enums::FeatureStatus::Supported,
+                        no_three_ds: common_enums::FeatureStatus::Supported,
+                        supported_card_networks: supported_card_network.clone(),
+                    }
+                }),
+            ),
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::GooglePay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::ApplePay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Paypal,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::AliPay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::AliPayHk,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::GoPay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::KakaoPay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Gcash,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Momo,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::TouchNGo,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::MbWay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::MobilePay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::WeChatPay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::SamsungPay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Paze,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Twint,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Vipps,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Dana,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Wallet,
+        PaymentMethodType::Swish,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::Klarna,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::Affirm,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::AfterpayClearpay,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::PayBright,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::Walley,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::Alma,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::PayLater,
+        PaymentMethodType::Atome,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::BancontactCard,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::Bizum,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::Blik,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::Eps,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::Ideal,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingCzechRepublic,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingFinland,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingPoland,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingSlovakia,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingFpx,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OnlineBankingThailand,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::OpenBankingUk,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankRedirect,
+        PaymentMethodType::Trustly,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankDebit,
+        PaymentMethodType::Ach,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankDebit,
+        PaymentMethodType::Sepa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods1.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankDebit,
+        PaymentMethodType::Bacs,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::Supported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::PermataBankTransfer,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::BcaBankTransfer,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::BniVa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::BriVa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::CimbVa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::DanamonVa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::MandiriVa,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::BankTransfer,
+        PaymentMethodType::Pix,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::CardRedirect,
+        PaymentMethodType::Knet,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::CardRedirect,
+        PaymentMethodType::Benefit,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::CardRedirect,
+        PaymentMethodType::MomoAtm,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Boleto,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Alfamart,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Indomaret,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Oxxo,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::SevenEleven,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Lawson,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::MiniStop,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::FamilyMart,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::Seicomart,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::Voucher,
+        PaymentMethodType::PayEasy,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::NotSupported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::GiftCard,
+        PaymentMethodType::PaySafeCard,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods3.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods.add(
+        enums::PaymentMethod::GiftCard,
+        PaymentMethodType::Givex,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods: supported_capture_methods2.clone(),
+            specific_features: None,
+        },
+    );
+
+    adyen_supported_payment_methods
+});
+
+static ADYEN_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+        display_name: "Adyen",
+        description: "Adyen is a Dutch payment company with the status of an acquiring bank that allows businesses to accept e-commerce, mobile, and point-of-sale payments. It is listed on the stock exchange Euronext Amsterdam",
+        connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+        integration_status: enums::ConnectorIntegrationStatus::Live,
+    };
+
+static ADYEN_SUPPORTED_WEBHOOK_FLOWS: &[enums::EventClass] = &[
+    enums::EventClass::Payments,
+    enums::EventClass::Refunds,
+    enums::EventClass::Disputes,
+    #[cfg(feature = "payouts")]
+    enums::EventClass::Payouts,
+    enums::EventClass::Mandates,
+];
+
+impl ConnectorSpecifications for Adyen {
+    fn is_balance_check_flow_required(&self, current_flow: api::CurrentFlowInfo) -> bool {
+        match current_flow {
+            api::CurrentFlowInfo::Authorize { request_data, .. } => {
+                matches!(&request_data.payment_method_data, payment_method_data::PaymentMethodData::GiftCard(giftcard_data) if giftcard_data.is_givex())
+            }
+            api::CurrentFlowInfo::SetupMandate { request_data, .. } => {
+                matches!(&request_data.payment_method_data, payment_method_data::PaymentMethodData::GiftCard(giftcard_data) if giftcard_data.is_givex())
+            }
+            api::CurrentFlowInfo::CompleteAuthorize { request_data, .. } => {
+                matches!(&request_data.payment_method_data, Some(payment_method_data::PaymentMethodData::GiftCard(giftcard_data)) if giftcard_data.is_givex())
+            }
+            api::CurrentFlowInfo::Psync { .. } => false,
+            api::CurrentFlowInfo::UpdatePostConfirm { .. } => false,
+            api::CurrentFlowInfo::ConnectorWebhookRegister { .. } => false,
+        }
+    }
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&ADYEN_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*ADYEN_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(ADYEN_SUPPORTED_WEBHOOK_FLOWS)
+    }
+
+    fn generate_connector_customer_id(
+        &self,
+        customer_id: &Option<common_utils::id_type::CustomerId>,
+        merchant_id: &common_utils::id_type::MerchantId,
+    ) -> Option<String> {
+        customer_id.as_ref().map(|cid| {
+            format!(
+                "{}_{}",
+                merchant_id.get_string_repr(),
+                cid.get_string_repr()
+            )
+        })
+    }
+
+    fn get_webhook_registration_plan(
+        &self,
+        scope: &api_models::merchant_connector_webhook_management::Scope,
+        connectors: &Connectors,
+    ) -> CustomResult<Vec<(ScopeIdentifier, String)>, errors::ConnectorError> {
+        use api_models::merchant_connector_webhook_management::{Scope, ScopeIdentifier};
+        let endpoint = connectors.adyen.management_base_url.as_str();
+        match scope {
+            Scope::NotSpecific => Ok(vec![(
+                ScopeIdentifier::NotSpecific,
+                format!("{endpoint}v3/merchants/{{merchantId}}/webhooks"),
+            )]),
+            _ => Err(errors::ConnectorError::NotSupported {
+                message: "Scope type not supported".to_string(),
+                connector: "Adyen",
+            })?,
+        }
+    }
+}

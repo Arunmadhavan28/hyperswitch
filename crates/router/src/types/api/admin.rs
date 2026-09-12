@@ -12,14 +12,15 @@ pub use api_models::{
         ToggleAllKVResponse, ToggleKVRequest, ToggleKVResponse, WebhookDetails,
     },
     organization::{
+        ConvertOrganizationToPlatformRequest, ConvertOrganizationToPlatformResponse,
         OrganizationCreateRequest, OrganizationId, OrganizationResponse, OrganizationUpdateRequest,
     },
 };
 use common_utils::{ext_traits::ValueExt, types::keymanager as km_types};
-use diesel_models::organization::OrganizationBridge;
+use diesel_models::{business_profile::CardTestingGuardConfig, organization::OrganizationBridge};
 use error_stack::ResultExt;
 use hyperswitch_domain_models::merchant_key_store::MerchantKeyStore;
-use masking::{ExposeInterface, PeekInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, PeekInterface, Secret};
 
 use crate::{
     consts,
@@ -36,6 +37,41 @@ use crate::{
     utils,
 };
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ProfileAcquirerConfigs {
+    pub acquirer_config_map: Option<common_types::domain::AcquirerConfigBucket>,
+    pub profile_id: common_utils::id_type::ProfileId,
+}
+
+impl From<ProfileAcquirerConfigs>
+    for Option<api_models::profile_acquirer::ProfileAcquirerConfigsResponse>
+{
+    fn from(item: ProfileAcquirerConfigs) -> Self {
+        item.acquirer_config_map.map(|config_map_val| {
+            let default_id = config_map_val.default_acquirer_config.clone();
+
+            let configs = config_map_val
+                .configs
+                .into_iter()
+                .map(|(profile_acquirer_id, acquirer_configs)| {
+                    (
+                        profile_acquirer_id,
+                        acquirer_configs
+                            .iter()
+                            .map(api_models::profile_acquirer::AcquirerBucketConfigResponse::from)
+                            .collect(),
+                    )
+                })
+                .collect();
+
+            api_models::profile_acquirer::ProfileAcquirerConfigsResponse {
+                default_acquirer_config: default_id,
+                configs,
+            }
+        })
+    }
+}
+
 impl ForeignFrom<diesel_models::organization::Organization> for OrganizationResponse {
     fn foreign_from(org: diesel_models::organization::Organization) -> Self {
         Self {
@@ -49,6 +85,7 @@ impl ForeignFrom<diesel_models::organization::Organization> for OrganizationResp
             metadata: org.metadata,
             modified_at: org.modified_at,
             created_at: org.created_at,
+            organization_type: org.organization_type,
         }
     }
 }
@@ -65,6 +102,16 @@ impl ForeignTryFrom<domain::MerchantAccount> for MerchantAccountResponse {
         let pm_collect_link_config: Option<api_models::admin::BusinessCollectLinkConfig> = item
             .pm_collect_link_config
             .map(|config| config.parse_value("pm_collect_link_config"))
+            .transpose()?;
+
+        let network_tokenization_credentials = item
+            .network_tokenization_credentials
+            .map(|headers| {
+                headers
+                    .into_inner()
+                    .expose()
+                    .parse_value("network_tokenization_credentials")
+            })
             .transpose()?;
 
         Ok(Self {
@@ -92,6 +139,8 @@ impl ForeignTryFrom<domain::MerchantAccount> for MerchantAccountResponse {
             recon_status: item.recon_status,
             pm_collect_link_config,
             product_type: item.product_type,
+            merchant_account_type: item.merchant_account_type,
+            network_tokenization_credentials,
         })
     }
 }
@@ -138,12 +187,29 @@ impl ForeignTryFrom<domain::Profile> for ProfileResponse {
                     )
             })
             .transpose()?;
+
+        let network_tokenization_credentials = item
+            .network_tokenization_credentials
+            .map(|headers| {
+                headers
+                    .into_inner()
+                    .expose()
+                    .parse_value("network_tokenization_credentials")
+            })
+            .transpose()?;
+
         let masked_outgoing_webhook_custom_http_headers =
             outgoing_webhook_custom_http_headers.map(MaskedHeaders::from_headers);
 
+        let card_testing_guard_config = item
+            .card_testing_guard_config
+            .or(Some(CardTestingGuardConfig::default()));
+        let (is_external_vault_enabled, external_vault_connector_details) =
+            item.external_vault_details.into();
+
         Ok(Self {
             merchant_id: item.merchant_id,
-            profile_id,
+            profile_id: profile_id.clone(),
             profile_name: item.profile_name,
             return_url: item.return_url,
             enable_payment_response_hash: item.enable_payment_response_hash,
@@ -186,11 +252,46 @@ impl ForeignTryFrom<domain::Profile> for ProfileResponse {
             always_request_extended_authorization: item.always_request_extended_authorization,
             is_click_to_pay_enabled: item.is_click_to_pay_enabled,
             authentication_product_ids: item.authentication_product_ids,
-            card_testing_guard_config: item
-                .card_testing_guard_config
-                .map(ForeignInto::foreign_into),
+            card_testing_guard_config: card_testing_guard_config.map(ForeignInto::foreign_into),
             is_clear_pan_retries_enabled: item.is_clear_pan_retries_enabled,
             force_3ds_challenge: item.force_3ds_challenge,
+            is_debit_routing_enabled: Some(item.is_debit_routing_enabled),
+            merchant_business_country: item.merchant_business_country,
+            is_pre_network_tokenization_enabled: item.is_pre_network_tokenization_enabled,
+            acquirer_configs: item.acquirer_config_map.clone().map(|config_map_val| {
+                let mut configs = Vec::new();
+                let default_config_id = config_map_val.default_acquirer_config;
+                for (acquirer_id, config_list) in config_map_val.configs {
+                    let is_default = default_config_id == Some(acquirer_id.clone());
+                    for config in config_list {
+                        configs.push(api_models::profile_acquirer::ProfileAcquirerResponse::from(
+                            (acquirer_id.clone(), &profile_id, Some(&config), is_default),
+                        ));
+                    }
+                }
+                configs
+            }),
+            acquirer_config_bucket: ProfileAcquirerConfigs {
+                acquirer_config_map: item.acquirer_config_map.clone(),
+                profile_id: profile_id.clone(),
+            }
+            .into(),
+            is_iframe_redirection_enabled: item.is_iframe_redirection_enabled,
+            merchant_category_code: item.merchant_category_code,
+            merchant_country_code: item.merchant_country_code,
+            dispute_polling_interval: item.dispute_polling_interval,
+            is_manual_retry_enabled: item.is_manual_retry_enabled,
+            always_enable_overcapture: item.always_enable_overcapture,
+            is_external_vault_enabled,
+            external_vault_connector_details: external_vault_connector_details
+                .map(ForeignFrom::foreign_from),
+            billing_processor_id: item.billing_processor_id,
+            is_l2_l3_enabled: Some(item.is_l2_l3_enabled),
+            network_tokenization_credentials,
+            payment_method_blocking: item.payment_method_blocking.map(ForeignInto::foreign_into),
+            surcharge_connector_details: item
+                .surcharge_connector_details
+                .map(ForeignFrom::foreign_from),
         })
     }
 }
@@ -221,6 +322,10 @@ impl ForeignTryFrom<domain::Profile> for ProfileResponse {
             .change_context(errors::ParsingError::IntegerOverflow)?;
         let masked_outgoing_webhook_custom_http_headers =
             outgoing_webhook_custom_http_headers.map(MaskedHeaders::from_headers);
+
+        let card_testing_guard_config = item
+            .card_testing_guard_config
+            .or(Some(CardTestingGuardConfig::default()));
 
         Ok(Self {
             merchant_id: item.merchant_id,
@@ -262,10 +367,24 @@ impl ForeignTryFrom<domain::Profile> for ProfileResponse {
             is_network_tokenization_enabled: item.is_network_tokenization_enabled,
             is_click_to_pay_enabled: item.is_click_to_pay_enabled,
             authentication_product_ids: item.authentication_product_ids,
-            card_testing_guard_config: item
-                .card_testing_guard_config
-                .map(ForeignInto::foreign_into),
+            card_testing_guard_config: card_testing_guard_config.map(ForeignInto::foreign_into),
             is_clear_pan_retries_enabled: item.is_clear_pan_retries_enabled,
+            is_debit_routing_enabled: Some(item.is_debit_routing_enabled),
+            merchant_business_country: item.merchant_business_country,
+            is_iframe_redirection_enabled: item.is_iframe_redirection_enabled,
+            is_external_vault_enabled: item.is_external_vault_enabled,
+            is_l2_l3_enabled: None,
+            external_vault_connector_details: item
+                .external_vault_connector_details
+                .map(ForeignInto::foreign_into),
+            merchant_category_code: item.merchant_category_code,
+            merchant_country_code: item.merchant_country_code,
+            split_txns_enabled: item.split_txns_enabled,
+            revenue_recovery_retry_algorithm_type: item.revenue_recovery_retry_algorithm_type,
+            billing_processor_id: item.billing_processor_id,
+            surcharge_connector_details: item
+                .surcharge_connector_details
+                .map(ForeignInto::foreign_into),
         })
     }
 }
@@ -300,10 +419,11 @@ pub async fn create_profile_from_merchant_account(
     let outgoing_webhook_custom_http_headers = request
         .outgoing_webhook_custom_http_headers
         .async_map(|headers| {
-            core::payment_methods::cards::create_encrypted_data(
+            core::utils::create_encrypted_data(
                 &key_manager_state,
                 key_store,
                 headers,
+                common_utils::type_name!(diesel_models::payment_method::PaymentMethod),
             )
         })
         .await
@@ -331,25 +451,10 @@ pub async fn create_profile_from_merchant_account(
         "fs",
     )));
 
-    let card_testing_guard_config = match request.card_testing_guard_config {
-        Some(card_testing_guard_config) => Some(CardTestingGuardConfig::foreign_from(
-            card_testing_guard_config,
-        )),
-        None => Some(CardTestingGuardConfig {
-            is_card_ip_blocking_enabled: common_utils::consts::DEFAULT_CARD_IP_BLOCKING_STATUS,
-            card_ip_blocking_threshold: common_utils::consts::DEFAULT_CARD_IP_BLOCKING_THRESHOLD,
-            is_guest_user_card_blocking_enabled:
-                common_utils::consts::DEFAULT_GUEST_USER_CARD_BLOCKING_STATUS,
-            guest_user_card_blocking_threshold:
-                common_utils::consts::DEFAULT_GUEST_USER_CARD_BLOCKING_THRESHOLD,
-            is_customer_id_blocking_enabled:
-                common_utils::consts::DEFAULT_CUSTOMER_ID_BLOCKING_STATUS,
-            customer_id_blocking_threshold:
-                common_utils::consts::DEFAULT_CUSTOMER_ID_BLOCKING_THRESHOLD,
-            card_testing_guard_expiry:
-                common_utils::consts::DEFAULT_CARD_TESTING_GUARD_EXPIRY_IN_SECS,
-        }),
-    };
+    let card_testing_guard_config = request
+        .card_testing_guard_config
+        .map(CardTestingGuardConfig::foreign_from)
+        .or(Some(CardTestingGuardConfig::default()));
 
     Ok(domain::Profile::from(domain::ProfileSetter {
         profile_id,
@@ -442,5 +547,32 @@ pub async fn create_profile_from_merchant_account(
             .attach_printable("error while generating card testing secret key")?,
         is_clear_pan_retries_enabled: request.is_clear_pan_retries_enabled.unwrap_or_default(),
         force_3ds_challenge: request.force_3ds_challenge.unwrap_or_default(),
+        is_debit_routing_enabled: request.is_debit_routing_enabled.unwrap_or_default(),
+        merchant_business_country: request.merchant_business_country,
+        is_iframe_redirection_enabled: request.is_iframe_redirection_enabled,
+        is_pre_network_tokenization_enabled: request
+            .is_pre_network_tokenization_enabled
+            .unwrap_or_default(),
+        merchant_category_code: request.merchant_category_code,
+        merchant_country_code: request.merchant_country_code,
+        dispute_polling_interval: request.dispute_polling_interval,
+        is_manual_retry_enabled: request.is_manual_retry_enabled,
+        always_enable_overcapture: request.always_enable_overcapture,
+        external_vault_details: domain::ExternalVaultDetails::try_from((
+            request.is_external_vault_enabled,
+            request
+                .external_vault_connector_details
+                .map(ForeignInto::foreign_into),
+        ))
+        .change_context(errors::ApiErrorResponse::InternalServerError)
+        .attach_printable("error while generating external_vault_details")?,
+        billing_processor_id: request.billing_processor_id,
+        is_l2_l3_enabled: request.is_l2_l3_enabled.unwrap_or(false),
+        network_tokenization_credentials: None, // since credentials are at merchant level, they should not be in the profile, tracked in issue #15134
+        payment_method_blocking: None,
+        default_fallback_routing: None,
+        surcharge_connector_details: request
+            .surcharge_connector_details
+            .map(ForeignInto::foreign_into),
     }))
 }

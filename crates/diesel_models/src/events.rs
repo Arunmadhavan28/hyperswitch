@@ -26,6 +26,10 @@ pub struct EventNew {
     pub response: Option<Encryption>,
     pub delivery_attempt: Option<storage_enums::WebhookDeliveryAttempt>,
     pub metadata: Option<EventMetadata>,
+    pub is_overall_delivery_successful: Option<bool>,
+    pub processor_merchant_id: Option<common_utils::id_type::MerchantId>,
+    pub initiator_merchant_id: Option<common_utils::id_type::MerchantId>,
+    pub recipient: Option<storage_enums::EventRecipient>,
 }
 
 #[derive(Clone, Debug, Default, AsChangeset, router_derive::DebugAsDisplay)]
@@ -33,6 +37,7 @@ pub struct EventNew {
 pub struct EventUpdateInternal {
     pub is_webhook_notified: Option<bool>,
     pub response: Option<Encryption>,
+    pub is_overall_delivery_successful: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Identifiable, Queryable, Selectable)]
@@ -57,29 +62,61 @@ pub struct Event {
     pub response: Option<Encryption>,
     pub delivery_attempt: Option<storage_enums::WebhookDeliveryAttempt>,
     pub metadata: Option<EventMetadata>,
+    pub is_overall_delivery_successful: Option<bool>,
+    pub processor_merchant_id: Option<common_utils::id_type::MerchantId>,
+    pub initiator_merchant_id: Option<common_utils::id_type::MerchantId>,
+    pub recipient: Option<storage_enums::EventRecipient>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, AsExpression, diesel::FromSqlRow)]
 #[diesel(sql_type = diesel::sql_types::Jsonb)]
 pub enum EventMetadata {
+    #[cfg(feature = "v1")]
     Payment {
         payment_id: common_utils::id_type::PaymentId,
     },
-    Payout {
-        payout_id: String,
+    #[cfg(feature = "v2")]
+    Payment {
+        payment_id: common_utils::id_type::GlobalPaymentId,
     },
+    Payout {
+        payout_id: common_utils::id_type::PayoutId,
+    },
+    #[cfg(feature = "v1")]
     Refund {
         payment_id: common_utils::id_type::PaymentId,
         refund_id: String,
     },
+    #[cfg(feature = "v2")]
+    Refund {
+        payment_id: common_utils::id_type::GlobalPaymentId,
+        refund_id: common_utils::id_type::GlobalRefundId,
+    },
+    #[cfg(feature = "v1")]
     Dispute {
         payment_id: common_utils::id_type::PaymentId,
+        attempt_id: String,
+        dispute_id: String,
+    },
+    #[cfg(feature = "v2")]
+    Dispute {
+        payment_id: common_utils::id_type::GlobalPaymentId,
         attempt_id: String,
         dispute_id: String,
     },
     Mandate {
         payment_method_id: String,
         mandate_id: String,
+    },
+    Subscription {
+        subscription_id: common_utils::id_type::SubscriptionId,
+        invoice_id: Option<common_utils::id_type::InvoiceId>,
+        payment_id: Option<common_utils::id_type::PaymentId>,
+    },
+    #[cfg(feature = "v1")]
+    Surcharge {
+        payment_id: common_utils::id_type::PaymentId,
+        attempt_id: String,
     },
 }
 

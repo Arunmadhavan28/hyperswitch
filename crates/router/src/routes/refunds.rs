@@ -2,27 +2,51 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use router_env::{instrument, tracing, Flow};
 
 use super::app::AppState;
+#[cfg(feature = "v1")]
+use crate::core::refunds::*;
+#[cfg(feature = "v2")]
+use crate::core::refunds_v2::*;
 use crate::{
-    core::{api_locking, refunds::*},
+    core::api_locking,
     services::{api, authentication as auth, authorization::permissions::Permission},
     types::api::refunds,
 };
 
+#[cfg(feature = "v2")]
+/// A private module to hold internal types to be used in route handlers.
+/// This is because we will need to implement certain traits on these types which will have the resource id
+/// But the api payload will not contain the resource id
+/// So these types can hold the resource id along with actual api payload, on which api event and locking action traits can be implemented
+mod internal_payload_types {
+    use super::*;
+
+    // Serialize is implemented because of api events
+    #[derive(Debug, serde::Serialize)]
+    pub struct RefundsGenericRequestWithResourceId<T: serde::Serialize> {
+        pub global_refund_id: common_utils::id_type::GlobalRefundId,
+        pub payment_id: Option<common_utils::id_type::GlobalPaymentId>,
+        #[serde(flatten)]
+        pub payload: T,
+    }
+
+    impl<T: serde::Serialize> common_utils::events::ApiEventMetric
+        for RefundsGenericRequestWithResourceId<T>
+    {
+        fn get_api_event_type(&self) -> Option<common_utils::events::ApiEventsType> {
+            let refund_id = self.global_refund_id.clone();
+            let payment_id = self.payment_id.clone();
+            Some(common_utils::events::ApiEventsType::Refund {
+                payment_id,
+                refund_id,
+            })
+        }
+    }
+}
+
 /// Refunds - Create
 ///
 /// To create a refund against an already processed payment
-#[utoipa::path(
-    post,
-    path = "/refunds",
-    request_body=RefundRequest,
-    responses(
-        (status = 200, description = "Refund created", body = RefundResponse),
-        (status = 400, description = "Missing Mandatory fields")
-    ),
-    tag = "Refunds",
-    operation_id = "Create a Refund",
-    security(("api_key" = []))
-)]
+#[cfg(feature = "v1")]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsCreate))]
 // #[post("")]
 pub async fn refunds_create(
@@ -37,18 +61,18 @@ pub async fn refunds_create(
         &req,
         json_payload.into_inner(),
         |state, auth: auth::AuthenticationData, req, _| {
-            refund_create_core(
-                state,
-                auth.merchant_account,
-                auth.profile_id,
-                auth.key_store,
-                req,
-            )
+            let profile_id = auth.profile.map(|profile| profile.get_id().clone());
+            refund_create_core(state, auth.platform, profile_id, req)
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::ProfileRefundWrite,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -56,23 +80,63 @@ pub async fn refunds_create(
     ))
     .await
 }
+
+#[cfg(feature = "v2")]
+#[instrument(skip_all, fields(flow = ?Flow::RefundsCreate))]
+// #[post("")]
+pub async fn refunds_create(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    json_payload: web::Json<refunds::RefundsCreateRequest>,
+) -> HttpResponse {
+    let flow = Flow::RefundsCreate;
+
+    let global_refund_id =
+        common_utils::id_type::GlobalRefundId::generate(&state.conf.cell_information.id);
+    let payload = json_payload.into_inner();
+
+    let internal_refund_create_payload =
+        internal_payload_types::RefundsGenericRequestWithResourceId {
+            global_refund_id: global_refund_id.clone(),
+            payment_id: Some(payload.payment_id.clone()),
+            payload,
+        };
+
+    let auth_type = if state.conf.merchant_id_auth.merchant_id_auth_enabled {
+        &auth::MerchantIdAuth
+    } else {
+        auth::auth_type(
+            &auth::V2ApiKeyAuth {
+                allow_connected_scope_operation: false,
+                allow_platform_self_operation: false,
+            },
+            &auth::JWTAuth {
+                permission: Permission::ProfileRefundWrite,
+                allow_connected: false,
+                allow_platform: false,
+            },
+            req.headers(),
+        )
+    };
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        internal_refund_create_payload,
+        |state, auth: auth::AuthenticationData, req, _| {
+            refund_create_core(state, auth.platform, req.payload, global_refund_id.clone())
+        },
+        auth_type,
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(feature = "v1")]
 /// Refunds - Retrieve (GET)
 ///
 /// To retrieve the properties of a Refund. This may be used to get the status of a previously initiated payment or next action for an ongoing payment
-#[utoipa::path(
-    get,
-    path = "/refunds/{refund_id}",
-    params(
-        ("refund_id" = String, Path, description = "The identifier for refund")
-    ),
-    responses(
-        (status = 200, description = "Refund retrieved", body = RefundResponse),
-        (status = 404, description = "Refund does not exist in our records")
-    ),
-    tag = "Refunds",
-    operation_id = "Retrieve a Refund",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow))]
 // #[get("/{id}")]
 pub async fn refunds_retrieve(
@@ -85,6 +149,7 @@ pub async fn refunds_retrieve(
         refund_id: path.into_inner(),
         force_sync: query_params.force_sync,
         merchant_connector_details: None,
+        all_keys_required: query_params.all_keys_required,
     };
     let flow = match query_params.force_sync {
         Some(true) => Flow::RefundsRetrieveForceSync,
@@ -99,19 +164,24 @@ pub async fn refunds_retrieve(
         &req,
         refund_request,
         |state, auth: auth::AuthenticationData, refund_request, _| {
+            let profile_id = auth.profile.map(|profile| profile.get_id().clone());
             refund_response_wrapper(
                 state,
-                auth.merchant_account,
-                auth.profile_id,
-                auth.key_store,
+                auth.platform,
+                profile_id,
                 refund_request,
                 refund_retrieve_core_with_refund_id,
             )
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::ProfileRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -119,20 +189,120 @@ pub async fn refunds_retrieve(
     ))
     .await
 }
+
+#[cfg(feature = "v2")]
+#[instrument(skip_all, fields(flow))]
+pub async fn refunds_retrieve(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<common_utils::id_type::GlobalRefundId>,
+    query_params: web::Query<api_models::refunds::RefundsRetrieveBody>,
+) -> HttpResponse {
+    let refund_request = refunds::RefundsRetrieveRequest {
+        refund_id: path.into_inner(),
+        force_sync: query_params.force_sync,
+        merchant_connector_details: None,
+        return_raw_connector_response: query_params.return_raw_connector_response,
+    };
+    let flow = match query_params.force_sync {
+        Some(true) => Flow::RefundsRetrieveForceSync,
+        _ => Flow::RefundsRetrieve,
+    };
+
+    tracing::Span::current().record("flow", flow.to_string());
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        refund_request,
+        |state, auth: auth::AuthenticationData, refund_request, _| {
+            refund_retrieve_core_with_refund_id(
+                state,
+                auth.platform.get_processor().clone(),
+                auth.profile,
+                refund_request,
+            )
+        },
+        auth::auth_type(
+            &auth::V2ApiKeyAuth {
+                allow_connected_scope_operation: false,
+                allow_platform_self_operation: false,
+            },
+            &auth::JWTAuth {
+                permission: Permission::ProfileRefundRead,
+                allow_connected: false,
+                allow_platform: false,
+            },
+            req.headers(),
+        ),
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(feature = "v2")]
+#[instrument(skip_all, fields(flow))]
+pub async fn refunds_retrieve_with_gateway_creds(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<common_utils::id_type::GlobalRefundId>,
+    payload: web::Json<api_models::refunds::RefundsRetrievePayload>,
+) -> HttpResponse {
+    let flow = match payload.force_sync {
+        Some(true) => Flow::RefundsRetrieveForceSync,
+        _ => Flow::RefundsRetrieve,
+    };
+
+    tracing::Span::current().record("flow", flow.to_string());
+
+    let refund_request = refunds::RefundsRetrieveRequest {
+        refund_id: path.into_inner(),
+        force_sync: payload.force_sync,
+        merchant_connector_details: payload.merchant_connector_details.clone(),
+        return_raw_connector_response: payload.return_raw_connector_response,
+    };
+
+    let auth_type = if state.conf.merchant_id_auth.merchant_id_auth_enabled {
+        &auth::MerchantIdAuth
+    } else {
+        auth::auth_type(
+            &auth::V2ApiKeyAuth {
+                allow_connected_scope_operation: false,
+                allow_platform_self_operation: false,
+            },
+            &auth::JWTAuth {
+                permission: Permission::ProfileRefundRead,
+                allow_connected: false,
+                allow_platform: false,
+            },
+            req.headers(),
+        )
+    };
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        refund_request,
+        |state, auth: auth::AuthenticationData, refund_request, _| {
+            refund_retrieve_core_with_refund_id(
+                state,
+                auth.platform.get_processor().clone(),
+                auth.profile,
+                refund_request,
+            )
+        },
+        auth_type,
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(feature = "v1")]
 /// Refunds - Retrieve (POST)
 ///
 /// To retrieve the properties of a Refund. This may be used to get the status of a previously initiated payment or next action for an ongoing payment
-#[utoipa::path(
-    get,
-    path = "/refunds/sync",
-    responses(
-        (status = 200, description = "Refund retrieved", body = RefundResponse),
-        (status = 404, description = "Refund does not exist in our records")
-    ),
-    tag = "Refunds",
-    operation_id = "Retrieve a Refund",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow))]
 // #[post("/sync")]
 pub async fn refunds_retrieve_with_body(
@@ -153,38 +323,28 @@ pub async fn refunds_retrieve_with_body(
         &req,
         json_payload.into_inner(),
         |state, auth: auth::AuthenticationData, req, _| {
+            let profile_id = auth.profile.map(|profile| profile.get_id().clone());
             refund_response_wrapper(
                 state,
-                auth.merchant_account,
-                auth.profile_id,
-                auth.key_store,
+                auth.platform,
+                profile_id,
                 req,
                 refund_retrieve_core_with_refund_id,
             )
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: true,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await
 }
+
+#[cfg(feature = "v1")]
 /// Refunds - Update
 ///
 /// To update the properties of a Refund object. This may include attaching a reason for the refund or metadata fields
-#[utoipa::path(
-    post,
-    path = "/refunds/{refund_id}",
-    params(
-        ("refund_id" = String, Path, description = "The identifier for refund")
-    ),
-    request_body=RefundUpdateRequest,
-    responses(
-        (status = 200, description = "Refund updated", body = RefundResponse),
-        (status = 400, description = "Missing Mandatory fields")
-    ),
-    tag = "Refunds",
-    operation_id = "Update a Refund",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsUpdate))]
 // #[post("/{id}")]
 pub async fn refunds_update(
@@ -202,29 +362,93 @@ pub async fn refunds_update(
         &req,
         refund_update_req,
         |state, auth: auth::AuthenticationData, req, _| {
-            refund_update_core(state, auth.merchant_account, req)
+            refund_update_core(state, auth.platform, req)
         },
-        &auth::HeaderAuth(auth::ApiKeyAuth),
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: true,
+            allow_platform_self_operation: false,
+        }),
         api_locking::LockAction::NotApplicable,
     ))
     .await
 }
+
+#[cfg(feature = "v1")]
+/// Refunds - Reverse
+///
+/// Reverse or void a successful refund before connector settlement.
+#[instrument(skip_all, fields(flow = ?Flow::RefundsReverse))]
+pub async fn refunds_reverse(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    json_payload: web::Json<refunds::RefundReverseRequest>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let flow = Flow::RefundsReverse;
+    let mut refund_reverse_request = json_payload.into_inner();
+    refund_reverse_request.refund_id = path.into_inner();
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        refund_reverse_request,
+        |state, auth: auth::AuthenticationData, request, _| {
+            refund_reverse_core(state, auth.platform, request)
+        },
+        &auth::HeaderAuth(auth::ApiKeyAuth {
+            allow_connected_scope_operation: true,
+            allow_platform_self_operation: false,
+        }),
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(feature = "v2")]
+#[instrument(skip_all, fields(flow = ?Flow::RefundsUpdate))]
+pub async fn refunds_metadata_update(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    json_payload: web::Json<refunds::RefundMetadataUpdateRequest>,
+    path: web::Path<common_utils::id_type::GlobalRefundId>,
+) -> HttpResponse {
+    let flow = Flow::RefundsUpdate;
+
+    let global_refund_id = path.into_inner();
+    let internal_payload = internal_payload_types::RefundsGenericRequestWithResourceId {
+        global_refund_id: global_refund_id.clone(),
+        payment_id: None,
+        payload: json_payload.into_inner(),
+    };
+
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        internal_payload,
+        |state, auth: auth::AuthenticationData, req, _| {
+            refund_metadata_update_core(
+                state,
+                auth.platform.get_processor().get_account().clone(),
+                req.payload,
+                global_refund_id.clone(),
+            )
+        },
+        &auth::V2ApiKeyAuth {
+            allow_connected_scope_operation: false,
+            allow_platform_self_operation: false,
+        },
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(all(feature = "v1", feature = "olap"))]
 /// Refunds - List
 ///
 /// To list the refunds associated with a payment_id or with the merchant, if payment_id is not provided
-#[utoipa::path(
-    post,
-    path = "/refunds/list",
-    request_body=RefundListRequest,
-    responses(
-        (status = 200, description = "List of refunds", body = RefundListResponse),
-    ),
-    tag = "Refunds",
-    operation_id = "List all Refunds",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsList))]
-#[cfg(feature = "olap")]
 pub async fn refunds_list(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -237,12 +461,17 @@ pub async fn refunds_list(
         &req,
         payload.into_inner(),
         |state, auth: auth::AuthenticationData, req, _| {
-            refund_list(state, auth.merchant_account, None, req)
+            refund_list(state, auth.platform.get_processor().clone(), None, req)
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::MerchantRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -251,22 +480,49 @@ pub async fn refunds_list(
     .await
 }
 
+#[cfg(all(feature = "v2", feature = "olap"))]
+#[instrument(skip_all, fields(flow = ?Flow::RefundsList))]
+pub async fn refunds_list(
+    state: web::Data<AppState>,
+    req: HttpRequest,
+    payload: web::Json<api_models::refunds::RefundListRequest>,
+) -> HttpResponse {
+    let flow = Flow::RefundsList;
+    Box::pin(api::server_wrap(
+        flow,
+        state,
+        &req,
+        payload.into_inner(),
+        |state, auth: auth::AuthenticationData, req, _| {
+            refund_list(
+                state,
+                auth.platform.get_processor().get_account().clone(),
+                auth.profile,
+                req,
+            )
+        },
+        auth::auth_type(
+            &auth::V2ApiKeyAuth {
+                allow_connected_scope_operation: false,
+                allow_platform_self_operation: false,
+            },
+            &auth::JWTAuth {
+                permission: Permission::MerchantRefundRead,
+                allow_connected: true,
+                allow_platform: false,
+            },
+            req.headers(),
+        ),
+        api_locking::LockAction::NotApplicable,
+    ))
+    .await
+}
+
+#[cfg(all(feature = "v1", feature = "olap"))]
 /// Refunds - List at profile level
 ///
 /// To list the refunds associated with a payment_id or with the merchant, if payment_id is not provided
-#[utoipa::path(
-    post,
-    path = "/refunds/profile/list",
-    request_body=RefundListRequest,
-    responses(
-        (status = 200, description = "List of refunds", body = RefundListResponse),
-    ),
-    tag = "Refunds",
-    operation_id = "List all Refunds",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsList))]
-#[cfg(feature = "olap")]
 pub async fn refunds_list_profile(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -281,15 +537,20 @@ pub async fn refunds_list_profile(
         |state, auth: auth::AuthenticationData, req, _| {
             refund_list(
                 state,
-                auth.merchant_account,
-                auth.profile_id.map(|profile_id| vec![profile_id]),
+                auth.platform.get_processor().clone(),
+                auth.profile.map(|profile| vec![profile.get_id().clone()]),
                 req,
             )
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::ProfileRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -298,22 +559,11 @@ pub async fn refunds_list_profile(
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 /// Refunds - Filter
 ///
 /// To list the refunds filters associated with list of connectors, currencies and payment statuses
-#[utoipa::path(
-    post,
-    path = "/refunds/filter",
-    request_body=TimeRange,
-    responses(
-        (status = 200, description = "List of filters", body = RefundListMetaData),
-    ),
-    tag = "Refunds",
-    operation_id = "List all filters for Refunds",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsList))]
-#[cfg(feature = "olap")]
 pub async fn refunds_filter_list(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -326,12 +576,17 @@ pub async fn refunds_filter_list(
         &req,
         payload.into_inner(),
         |state, auth: auth::AuthenticationData, req, _| {
-            refund_filter_list(state, auth.merchant_account, req)
+            refund_filter_list(state, auth.platform.get_processor().clone(), req)
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::MerchantRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -340,21 +595,11 @@ pub async fn refunds_filter_list(
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 /// Refunds - Filter V2
 ///
 /// To list the refunds filters associated with list of connectors, currencies and payment statuses
-#[utoipa::path(
-    get,
-    path = "/refunds/v2/filter",
-    responses(
-        (status = 200, description = "List of static filters", body = RefundListFilters),
-    ),
-    tag = "Refunds",
-    operation_id = "List all filters for Refunds",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsFilters))]
-#[cfg(feature = "olap")]
 pub async fn get_refunds_filters(state: web::Data<AppState>, req: HttpRequest) -> HttpResponse {
     let flow = Flow::RefundsFilters;
     Box::pin(api::server_wrap(
@@ -363,12 +608,17 @@ pub async fn get_refunds_filters(state: web::Data<AppState>, req: HttpRequest) -
         &req,
         (),
         |state, auth: auth::AuthenticationData, _, _| {
-            get_filters_for_refunds(state, auth.merchant_account, None)
+            get_filters_for_refunds(state, auth.platform.get_processor().clone(), None)
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::MerchantRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -377,21 +627,11 @@ pub async fn get_refunds_filters(state: web::Data<AppState>, req: HttpRequest) -
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 /// Refunds - Filter V2 at profile level
 ///
 /// To list the refunds filters associated with list of connectors, currencies and payment statuses
-#[utoipa::path(
-    get,
-    path = "/refunds/v2/profile/filter",
-    responses(
-        (status = 200, description = "List of static filters", body = RefundListFilters),
-    ),
-    tag = "Refunds",
-    operation_id = "List all filters for Refunds",
-    security(("api_key" = []))
-)]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsFilters))]
-#[cfg(feature = "olap")]
 pub async fn get_refunds_filters_profile(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -405,14 +645,19 @@ pub async fn get_refunds_filters_profile(
         |state, auth: auth::AuthenticationData, _, _| {
             get_filters_for_refunds(
                 state,
-                auth.merchant_account,
-                auth.profile_id.map(|profile_id| vec![profile_id]),
+                auth.platform.get_processor().clone(),
+                auth.profile.map(|profile| vec![profile.get_id().clone()]),
             )
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::ProfileRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -421,8 +666,8 @@ pub async fn get_refunds_filters_profile(
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsAggregate))]
-#[cfg(feature = "olap")]
 pub async fn get_refunds_aggregates(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -436,12 +681,17 @@ pub async fn get_refunds_aggregates(
         &req,
         query_params,
         |state, auth: auth::AuthenticationData, req, _| {
-            get_aggregates_for_refunds(state, auth.merchant_account, None, req)
+            get_aggregates_for_refunds(state, auth.platform.get_processor().clone(), None, req)
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::MerchantRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),
@@ -450,8 +700,8 @@ pub async fn get_refunds_aggregates(
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsManualUpdate))]
-#[cfg(feature = "olap")]
 pub async fn refunds_manual_update(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -473,8 +723,8 @@ pub async fn refunds_manual_update(
     .await
 }
 
+#[cfg(all(feature = "v1", feature = "olap"))]
 #[instrument(skip_all, fields(flow = ?Flow::RefundsAggregate))]
-#[cfg(feature = "olap")]
 pub async fn get_refunds_aggregate_profile(
     state: web::Data<AppState>,
     req: HttpRequest,
@@ -490,15 +740,20 @@ pub async fn get_refunds_aggregate_profile(
         |state, auth: auth::AuthenticationData, req, _| {
             get_aggregates_for_refunds(
                 state,
-                auth.merchant_account,
-                auth.profile_id.map(|profile_id| vec![profile_id]),
+                auth.platform.get_processor().clone(),
+                auth.profile.map(|profile| vec![profile.get_id().clone()]),
                 req,
             )
         },
         auth::auth_type(
-            &auth::HeaderAuth(auth::ApiKeyAuth),
+            &auth::HeaderAuth(auth::ApiKeyAuth {
+                allow_connected_scope_operation: true,
+                allow_platform_self_operation: false,
+            }),
             &auth::JWTAuth {
                 permission: Permission::ProfileRefundRead,
+                allow_connected: true,
+                allow_platform: false,
             },
             req.headers(),
         ),

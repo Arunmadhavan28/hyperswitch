@@ -1,6 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
-use masking::Secret;
+use hyperswitch_masking::Secret;
 use router::types::{self, storage::enums, PaymentsResponseData};
 use test_utils::connector_auth::ConnectorAuthentication;
 
@@ -67,6 +67,14 @@ fn token_details() -> Option<types::PaymentMethodTokenizationData> {
         browser_info: None,
         amount: None,
         currency: enums::Currency::USD,
+        split_payments: None,
+        mandate_id: None,
+        setup_future_usage: None,
+        customer_acceptance: None,
+        setup_mandate_details: None,
+        payment_method_type: None,
+        router_return_url: None,
+        capture_method: None,
     })
 }
 
@@ -440,6 +448,14 @@ async fn should_fail_payment_for_incorrect_cvc() {
                 browser_info: None,
                 amount: None,
                 currency: enums::Currency::USD,
+                split_payments: None,
+                mandate_id: None,
+                setup_future_usage: None,
+                customer_acceptance: None,
+                setup_mandate_details: None,
+                payment_method_type: None,
+                router_return_url: None,
+                capture_method: None,
             }),
             get_default_payment_info(None),
         )
@@ -471,6 +487,14 @@ async fn should_fail_payment_for_invalid_exp_month() {
                 browser_info: None,
                 amount: None,
                 currency: enums::Currency::USD,
+                split_payments: None,
+                mandate_id: None,
+                setup_future_usage: None,
+                customer_acceptance: None,
+                setup_mandate_details: None,
+                payment_method_type: None,
+                router_return_url: None,
+                capture_method: None,
             }),
             get_default_payment_info(None),
         )
@@ -502,6 +526,14 @@ async fn should_fail_payment_for_incorrect_expiry_year() {
                 browser_info: None,
                 amount: None,
                 currency: enums::Currency::USD,
+                split_payments: None,
+                mandate_id: None,
+                setup_future_usage: None,
+                customer_acceptance: None,
+                setup_mandate_details: None,
+                payment_method_type: None,
+                router_return_url: None,
+                capture_method: None,
             }),
             get_default_payment_info(None),
         )

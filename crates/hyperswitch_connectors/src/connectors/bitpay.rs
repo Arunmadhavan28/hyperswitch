@@ -1,4 +1,6 @@
 pub mod transformers;
+use std::sync::LazyLock;
+
 use api_models::webhooks::IncomingWebhookEvent;
 use common_enums::enums;
 use common_utils::{
@@ -40,8 +42,7 @@ use hyperswitch_interfaces::{
     types::{PaymentsAuthorizeType, PaymentsSyncType, Response},
     webhooks,
 };
-use lazy_static::lazy_static;
-use masking::{Mask, PeekInterface};
+use hyperswitch_masking::{Mask, PeekInterface};
 use transformers as bitpay;
 
 use self::bitpay::BitpayWebhookDetails;
@@ -87,7 +88,8 @@ where
         &self,
         _req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let header = vec![
             (
                 headers::CONTENT_TYPE.to_string(),
@@ -124,7 +126,8 @@ impl ConnectorCommon for Bitpay {
     fn get_auth_header(
         &self,
         auth_type: &ConnectorAuthType,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let auth = bitpay::BitpayAuthType::try_from(auth_type)
             .change_context(errors::ConnectorError::FailedToObtainAuthType)?;
         Ok(vec![(
@@ -153,8 +156,11 @@ impl ConnectorCommon for Bitpay {
             reason: response.message,
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -185,7 +191,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -269,7 +276,8 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Bit
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -391,6 +399,7 @@ impl webhooks::IncomingWebhook for Bitpay {
     fn get_webhook_event_type(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
+        _context: Option<&webhooks::WebhookContext>,
     ) -> CustomResult<IncomingWebhookEvent, errors::ConnectorError> {
         let notif: BitpayWebhookDetails = request
             .body
@@ -413,7 +422,8 @@ impl webhooks::IncomingWebhook for Bitpay {
     fn get_webhook_resource_object(
         &self,
         request: &webhooks::IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         let notif: BitpayWebhookDetails = request
             .body
             .parse_struct("BitpayWebhookDetails")
@@ -421,42 +431,38 @@ impl webhooks::IncomingWebhook for Bitpay {
         Ok(Box::new(notif))
     }
 }
+static BITPAY_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> = LazyLock::new(|| {
+    let supported_capture_methods = vec![enums::CaptureMethod::Automatic];
 
-lazy_static! {
-    static ref BITPAY_SUPPORTED_PAYMENT_METHODS: SupportedPaymentMethods = {
-        let supported_capture_methods = vec![
-            enums::CaptureMethod::Automatic,
-        ];
+    let mut bitpay_supported_payment_methods = SupportedPaymentMethods::new();
 
-        let mut bitpay_supported_payment_methods = SupportedPaymentMethods::new();
+    bitpay_supported_payment_methods.add(
+        enums::PaymentMethod::Crypto,
+        enums::PaymentMethodType::CryptoCurrency,
+        PaymentMethodDetails {
+            mandates: enums::FeatureStatus::NotSupported,
+            refunds: enums::FeatureStatus::Supported,
+            supported_capture_methods,
+            specific_features: None,
+        },
+    );
 
-        bitpay_supported_payment_methods.add(
-            enums::PaymentMethod::Crypto,
-            enums::PaymentMethodType::CryptoCurrency,
-            PaymentMethodDetails{
-                mandates: enums::FeatureStatus::NotSupported,
-                refunds: enums::FeatureStatus::Supported,
-                supported_capture_methods: supported_capture_methods.clone(),
-                specific_features: None,
-            }
-        );
+    bitpay_supported_payment_methods
+});
 
-        bitpay_supported_payment_methods
-    };
-
-    static ref BITPAY_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+static BITPAY_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
         display_name: "Bitpay",
         description:
             "BitPay is a cryptocurrency payment processor that enables businesses to accept Bitcoin and other digital currencies ",
-        connector_type: enums::PaymentConnectorCategory::AlternativePaymentMethod,
+        connector_type: enums::HyperswitchConnectorCategory::AlternativePaymentMethod,
+        integration_status: enums::ConnectorIntegrationStatus::Sandbox,
     };
 
-    static ref BITPAY_SUPPORTED_WEBHOOK_FLOWS: Vec<enums::EventClass> = vec![enums::EventClass::Payments];
-}
+static BITPAY_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 1] = [enums::EventClass::Payments];
 
 impl ConnectorSpecifications for Bitpay {
     fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
-        Some(&*BITPAY_CONNECTOR_INFO)
+        Some(&BITPAY_CONNECTOR_INFO)
     }
 
     fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
@@ -464,6 +470,6 @@ impl ConnectorSpecifications for Bitpay {
     }
 
     fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
-        Some(&*BITPAY_SUPPORTED_WEBHOOK_FLOWS)
+        Some(&BITPAY_SUPPORTED_WEBHOOK_FLOWS)
     }
 }

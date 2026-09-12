@@ -110,6 +110,22 @@ pub enum UserErrors {
     MissingEmailConfig,
     #[error("Invalid Auth Method Operation: {0}")]
     InvalidAuthMethodOperationWithMessage(String),
+    #[error("Invalid Clone Connector Operation: {0}")]
+    InvalidCloneConnectorOperation(String),
+    #[error("Error cloning connector: {0}")]
+    ErrorCloningConnector(String),
+    #[error("Invalid Embedded Operation : {0}")]
+    InvalidEmbeddedOperation(String),
+    #[error("Invalid Platform Operation")]
+    InvalidPlatformOperation,
+    #[error("MaxSavedViewsReached")]
+    MaxSavedViewsReached,
+    #[error("SavedViewNameAlreadyExists")]
+    SavedViewNameAlreadyExists,
+    #[error("SavedViewNotFound")]
+    SavedViewNotFound,
+    #[error("InvalidSavedViewName")]
+    InvalidSavedViewName,
 }
 
 impl common_utils::errors::ErrorSwitch<api_models::errors::types::ApiErrorResponse> for UserErrors {
@@ -285,6 +301,33 @@ impl common_utils::errors::ErrorSwitch<api_models::errors::types::ApiErrorRespon
             Self::InvalidAuthMethodOperationWithMessage(_) => {
                 AER::BadRequest(ApiError::new(sub_code, 57, self.get_error_message(), None))
             }
+            Self::InvalidCloneConnectorOperation(_) => {
+                AER::BadRequest(ApiError::new(sub_code, 58, self.get_error_message(), None))
+            }
+            Self::ErrorCloningConnector(_) => AER::InternalServerError(ApiError::new(
+                sub_code,
+                59,
+                self.get_error_message(),
+                None,
+            )),
+            Self::InvalidEmbeddedOperation(_) => {
+                AER::BadRequest(ApiError::new(sub_code, 60, self.get_error_message(), None))
+            }
+            Self::InvalidPlatformOperation => {
+                AER::BadRequest(ApiError::new(sub_code, 61, self.get_error_message(), None))
+            }
+            Self::MaxSavedViewsReached => {
+                AER::BadRequest(ApiError::new(sub_code, 62, self.get_error_message(), None))
+            }
+            Self::SavedViewNameAlreadyExists => {
+                AER::BadRequest(ApiError::new(sub_code, 63, self.get_error_message(), None))
+            }
+            Self::SavedViewNotFound => {
+                AER::NotFound(ApiError::new(sub_code, 64, self.get_error_message(), None))
+            }
+            Self::InvalidSavedViewName => {
+                AER::BadRequest(ApiError::new(sub_code, 65, self.get_error_message(), None))
+            }
         }
     }
 }
@@ -349,11 +392,31 @@ impl UserErrors {
             Self::ThemeNotFound => "Theme not found".to_string(),
             Self::ThemeAlreadyExists => "Theme with lineage already exists".to_string(),
             Self::InvalidThemeLineage(field_name) => {
-                format!("Invalid field: {} in lineage", field_name)
+                format!("Invalid field: {field_name} in lineage")
             }
             Self::MissingEmailConfig => "Missing required field: email_config".to_string(),
             Self::InvalidAuthMethodOperationWithMessage(operation) => {
-                format!("Invalid Auth Method Operation: {}", operation)
+                format!("Invalid Auth Method Operation: {operation}")
+            }
+            Self::InvalidCloneConnectorOperation(operation) => {
+                format!("Invalid Clone Connector Operation: {operation}")
+            }
+            Self::ErrorCloningConnector(error_message) => {
+                format!("Error cloning connector: {error_message}")
+            }
+            Self::InvalidEmbeddedOperation(error_message) => {
+                format!("Invalid Embedded Operation: {error_message}")
+            }
+            Self::InvalidPlatformOperation => "Invalid Platform Operation".to_string(),
+            Self::MaxSavedViewsReached => {
+                "Maximum number of saved views reached (limit: 5)".to_string()
+            }
+            Self::SavedViewNameAlreadyExists => {
+                "A saved view with this name already exists".to_string()
+            }
+            Self::SavedViewNotFound => "Saved view not found".to_string(),
+            Self::InvalidSavedViewName => {
+                "The saved view name cannot be empty or contain only whitespace".to_string()
             }
         }
     }

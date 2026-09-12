@@ -1,8 +1,8 @@
 pub mod transformers;
-
-use std::fmt::Write;
+use std::{fmt::Write, sync::LazyLock};
 
 use api_models::webhooks::{IncomingWebhookEvent, ObjectReferenceId};
+use common_enums::enums;
 use common_utils::{
     errors::CustomResult,
     ext_traits::BytesExt,
@@ -22,7 +22,10 @@ use hyperswitch_domain_models::{
         PaymentsCancelData, PaymentsCaptureData, PaymentsSessionData, PaymentsSyncData,
         RefundsData, SetupMandateRequestData,
     },
-    router_response_types::{PaymentsResponseData, RefundsResponseData},
+    router_response_types::{
+        ConnectorInfo, PaymentMethodDetails, PaymentsResponseData, RefundsResponseData,
+        SupportedPaymentMethods, SupportedPaymentMethodsExt,
+    },
     types::{
         PaymentsAuthorizeRouterData, PaymentsCancelRouterData, PaymentsCaptureRouterData,
         PaymentsSyncRouterData, RefundSyncRouterData, RefundsRouterData, SetupMandateRouterData,
@@ -38,9 +41,9 @@ use hyperswitch_interfaces::{
     errors,
     events::connector_api_logs::ConnectorEvent,
     types::{self, Response},
-    webhooks::{IncomingWebhook, IncomingWebhookRequestDetails},
+    webhooks::{IncomingWebhook, IncomingWebhookRequestDetails, WebhookContext},
 };
-use masking::PeekInterface;
+use hyperswitch_masking::PeekInterface;
 use transformers as itaubank;
 
 use crate::{
@@ -88,12 +91,13 @@ where
         &self,
         req: &RouterData<Flow, Request, Response>,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let access_token =
             req.access_token
                 .clone()
                 .ok_or(errors::ConnectorError::MissingRequiredField {
-                    field_name: "access_token",
+                    field_name: "access_token".into(),
                 })?;
 
         let header = vec![
@@ -176,8 +180,11 @@ impl ConnectorCommon for Itaubank {
             reason,
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -201,7 +208,8 @@ impl ConnectorIntegration<AccessTokenAuth, AccessTokenRequestData, AccessToken> 
         &self,
         _req: &RefreshTokenRouterData,
         _connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         let flow_header = vec![
             (
                 headers::CONTENT_TYPE.to_string(),
@@ -298,8 +306,11 @@ impl ConnectorIntegration<AccessTokenAuth, AccessTokenRequestData, AccessToken> 
             reason: response.detail.or(response.user_message),
             attempt_status: None,
             connector_transaction_id: None,
-            issuer_error_code: None,
-            issuer_error_message: None,
+            connector_response_reference_id: None,
+            network_advice_code: None,
+            network_decline_code: None,
+            network_error_message: None,
+            connector_metadata: None,
         })
     }
 }
@@ -325,7 +336,8 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
         &self,
         req: &PaymentsAuthorizeRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -418,7 +430,8 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Ita
         &self,
         req: &PaymentsSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -492,7 +505,8 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         &self,
         req: &PaymentsCaptureRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -586,7 +600,8 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Itauban
         &self,
         req: &RefundsRouterData<Execute>,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -602,7 +617,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Itauban
         let itaubank_metadata = req.request.get_connector_metadata()?;
         let pix_data: itaubank::ItaubankMetaData = serde_json::from_value(itaubank_metadata)
             .change_context(errors::ConnectorError::MissingRequiredField {
-                field_name: "itaubank_metadata",
+                field_name: "itaubank_metadata".into(),
             })?;
         Ok(format!(
             "{}itau-ep9-gtw-pix-recebimentos-ext-v2/v2/pix/{}/devolucao/{}",
@@ -610,7 +625,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Itauban
             pix_data
                 .pix_id
                 .ok_or(errors::ConnectorError::MissingRequiredField {
-                    field_name: "pix_id"
+                    field_name: "pix_id".into()
                 })?,
             req.request.connector_transaction_id
         ))
@@ -687,7 +702,8 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Itaubank 
         &self,
         req: &RefundSyncRouterData,
         connectors: &Connectors,
-    ) -> CustomResult<Vec<(String, masking::Maskable<String>)>, errors::ConnectorError> {
+    ) -> CustomResult<Vec<(String, hyperswitch_masking::Maskable<String>)>, errors::ConnectorError>
+    {
         self.build_headers(req, connectors)
     }
 
@@ -703,7 +719,7 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Itaubank 
         let itaubank_metadata = req.request.get_connector_metadata()?;
         let pix_data: itaubank::ItaubankMetaData = serde_json::from_value(itaubank_metadata)
             .change_context(errors::ConnectorError::MissingRequiredField {
-                field_name: "itaubank_metadata",
+                field_name: "itaubank_metadata".into(),
             })?;
         Ok(format!(
             "{}itau-ep9-gtw-pix-recebimentos-ext-v2/v2/pix/{}/devolucao/{}",
@@ -711,7 +727,7 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Itaubank 
             pix_data
                 .pix_id
                 .ok_or(errors::ConnectorError::MissingRequiredField {
-                    field_name: "pix_id"
+                    field_name: "pix_id".into()
                 })?,
             req.request.connector_transaction_id
         ))
@@ -778,6 +794,7 @@ impl IncomingWebhook for Itaubank {
     fn get_webhook_event_type(
         &self,
         _request: &IncomingWebhookRequestDetails<'_>,
+        _context: Option<&WebhookContext>,
     ) -> CustomResult<IncomingWebhookEvent, errors::ConnectorError> {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
@@ -785,9 +802,50 @@ impl IncomingWebhook for Itaubank {
     fn get_webhook_resource_object(
         &self,
         _request: &IncomingWebhookRequestDetails<'_>,
-    ) -> CustomResult<Box<dyn masking::ErasedMaskSerialize>, errors::ConnectorError> {
+    ) -> CustomResult<Box<dyn hyperswitch_masking::ErasedMaskSerialize>, errors::ConnectorError>
+    {
         Err(report!(errors::ConnectorError::WebhooksNotImplemented))
     }
 }
 
-impl ConnectorSpecifications for Itaubank {}
+static ITAUBANK_SUPPORTED_PAYMENT_METHODS: LazyLock<SupportedPaymentMethods> =
+    LazyLock::new(|| {
+        let mut itaubank_supported_payment_methods = SupportedPaymentMethods::new();
+        let supported_capture_methods = vec![enums::CaptureMethod::Automatic];
+
+        itaubank_supported_payment_methods.add(
+            enums::PaymentMethod::BankTransfer,
+            enums::PaymentMethodType::Pix,
+            PaymentMethodDetails {
+                mandates: enums::FeatureStatus::NotSupported,
+                refunds: enums::FeatureStatus::Supported,
+                supported_capture_methods,
+                specific_features: None,
+            },
+        );
+
+        itaubank_supported_payment_methods
+    });
+
+static ITAUBANK_CONNECTOR_INFO: ConnectorInfo = ConnectorInfo {
+        display_name: "Itaubank",
+        description: "Itau Bank is a leading Brazilian financial institution offering a wide range of banking services, including retail banking, loans, and investment solutions.",
+        connector_type: enums::HyperswitchConnectorCategory::PaymentGateway,
+        integration_status: enums::ConnectorIntegrationStatus::Sandbox,
+    };
+
+static ITAUBANK_SUPPORTED_WEBHOOK_FLOWS: [enums::EventClass; 0] = [];
+
+impl ConnectorSpecifications for Itaubank {
+    fn get_connector_about(&self) -> Option<&'static ConnectorInfo> {
+        Some(&ITAUBANK_CONNECTOR_INFO)
+    }
+
+    fn get_supported_payment_methods(&self) -> Option<&'static SupportedPaymentMethods> {
+        Some(&*ITAUBANK_SUPPORTED_PAYMENT_METHODS)
+    }
+
+    fn get_supported_webhook_flows(&self) -> Option<&'static [enums::EventClass]> {
+        Some(&ITAUBANK_SUPPORTED_WEBHOOK_FLOWS)
+    }
+}

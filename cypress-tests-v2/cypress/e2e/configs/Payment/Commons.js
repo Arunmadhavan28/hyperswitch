@@ -5,7 +5,7 @@ import { getCustomExchange } from "./_Reusable";
 const successfulNo3DSCardDetails = {
   card_number: "4111111111111111",
   card_exp_month: "08",
-  card_exp_year: "25",
+  card_exp_year: "28",
   card_holder_name: "joseph Doe",
   card_cvc: "999",
 };
@@ -13,7 +13,7 @@ const successfulNo3DSCardDetails = {
 const successfulThreeDSTestCardDetails = {
   card_number: "4111111111111111",
   card_exp_month: "10",
-  card_exp_year: "25",
+  card_exp_year: "28",
   card_holder_name: "morino",
   card_cvc: "999",
 };
@@ -52,12 +52,42 @@ const multiUseMandateData = {
   },
 };
 
+const billingAddress = {
+  address: {
+    line1: "1467",
+    line2: "Harrison Street",
+    line3: "Harrison Street",
+    city: "San Fransico",
+    state: "California",
+    zip: "94122",
+    country: "US",
+    first_name: "joseph",
+    last_name: "Doe",
+  },
+  email: "example@example.com",
+};
+
+const shippingAddress = {
+  address: {
+    line1: "1467",
+    line2: "Harrison Street",
+    line3: "Harrison Street",
+    city: "San Fransico",
+    state: "California",
+    zip: "94122",
+    country: "US",
+    first_name: "joseph",
+    last_name: "Doe",
+  },
+  email: "example@example.com",
+};
+
 export const payment_methods_enabled = [
   {
-    payment_method: "bank_debit",
-    payment_method_types: [
+    payment_method_type: "bank_debit",
+    payment_method_subtypes: [
       {
-        payment_method_type: "ach",
+        payment_method_subtype: "ach",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -68,7 +98,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "bacs",
+        payment_method_subtype: "bacs",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -79,7 +109,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "becs",
+        payment_method_subtype: "becs",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -90,7 +120,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "sepa",
+        payment_method_subtype: "sepa",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -103,10 +133,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "bank_redirect",
-    payment_method_types: [
+    payment_method_type: "bank_redirect",
+    payment_method_subtypes: [
       {
-        payment_method_type: "blik",
+        payment_method_subtype: "blik",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -117,7 +147,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "eps",
+        payment_method_subtype: "eps",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -128,7 +158,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "ideal",
+        payment_method_subtype: "ideal",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -139,7 +169,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "giropay",
+        payment_method_subtype: "giropay",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -150,7 +180,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "local_bank_redirect",
+        payment_method_subtype: "local_bank_redirect",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -161,7 +191,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "przelewy24",
+        payment_method_subtype: "przelewy24",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -172,7 +202,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "sofort",
+        payment_method_subtype: "sofort",
         payment_experience: null,
         card_networks: null,
         accepted_currencies: null,
@@ -185,10 +215,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "bank_transfer",
-    payment_method_types: [
+    payment_method_type: "bank_transfer",
+    payment_method_subtypes: [
       {
-        payment_method_type: "ach",
+        payment_method_subtype: "ach",
         payment_experience: "redirect_to_url",
         card_networks: null,
         accepted_currencies: null,
@@ -199,7 +229,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "bacs",
+        payment_method_subtype: "bacs",
         payment_experience: "redirect_to_url",
         card_networks: null,
         accepted_currencies: null,
@@ -210,14 +240,14 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "pix",
+        payment_method_subtype: "pix",
         minimum_amount: -1,
         maximum_amount: 68607706,
         recurring_enabled: false,
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "sepa",
+        payment_method_subtype: "sepa",
         payment_experience: "redirect_to_url",
         card_networks: null,
         accepted_currencies: null,
@@ -230,10 +260,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "card",
-    payment_method_types: [
+    payment_method_type: "card",
+    payment_method_subtypes: [
       {
-        payment_method_type: "credit",
+        payment_method_subtype: "credit",
         card_networks: [
           "AmericanExpress",
           "Discover",
@@ -251,7 +281,7 @@ export const payment_methods_enabled = [
         installment_payment_enabled: true,
       },
       {
-        payment_method_type: "debit",
+        payment_method_subtype: "debit",
         card_networks: [
           "AmericanExpress",
           "Discover",
@@ -271,10 +301,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "card_redirect",
-    payment_method_types: [
+    payment_method_type: "card_redirect",
+    payment_method_subtypes: [
       {
-        payment_method_type: "card_redirect",
+        payment_method_subtype: "card_redirect",
         payment_experience: "redirect_to_url",
         card_networks: null,
         accepted_currencies: null,
@@ -287,10 +317,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "real_time_payment",
-    payment_method_types: [
+    payment_method_type: "real_time_payment",
+    payment_method_subtypes: [
       {
-        payment_method_type: "duit_now",
+        payment_method_subtype: "duit_now",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -298,7 +328,7 @@ export const payment_methods_enabled = [
         payment_experience: "redirect_to_url",
       },
       {
-        payment_method_type: "fps",
+        payment_method_subtype: "fps",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -306,7 +336,7 @@ export const payment_methods_enabled = [
         payment_experience: "redirect_to_url",
       },
       {
-        payment_method_type: "prompt_pay",
+        payment_method_subtype: "prompt_pay",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -314,7 +344,7 @@ export const payment_methods_enabled = [
         payment_experience: "redirect_to_url",
       },
       {
-        payment_method_type: "viet_qr",
+        payment_method_subtype: "viet_qr",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -324,10 +354,10 @@ export const payment_methods_enabled = [
     ],
   },
   {
-    payment_method: "upi",
-    payment_method_types: [
+    payment_method_type: "upi",
+    payment_method_subtypes: [
       {
-        payment_method_type: "upi_collect",
+        payment_method_subtype: "upi_collect",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -335,7 +365,7 @@ export const payment_methods_enabled = [
         payment_experience: "redirect_to_url",
       },
       {
-        payment_method_type: "upi_intent",
+        payment_method_subtype: "upi_intent",
         minimum_amount: 1,
         maximum_amount: 68607706,
         recurring_enabled: true,
@@ -368,19 +398,7 @@ export const connectorDetails = {
             pix: {},
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "BR",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
         currency: "BRL",
       },
     }),
@@ -409,19 +427,7 @@ export const connectorDetails = {
             },
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "NL",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
       },
     }),
     Giropay: getCustomExchange({
@@ -439,19 +445,7 @@ export const connectorDetails = {
             },
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "DE",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
       },
     }),
     Sofort: getCustomExchange({
@@ -466,19 +460,7 @@ export const connectorDetails = {
             },
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "DE",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
       },
     }),
     Eps: getCustomExchange({
@@ -492,19 +474,7 @@ export const connectorDetails = {
             },
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "AT",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
       },
     }),
     Przelewy24: getCustomExchange({
@@ -545,26 +515,19 @@ export const connectorDetails = {
             },
           },
         },
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "Harrison Street",
-            line3: "Harrison Street",
-            city: "San Fransico",
-            state: "California",
-            zip: "94122",
-            country: "PL",
-            first_name: "john",
-            last_name: "doe",
-          },
-        },
+        billing: billingAddress,
       },
     }),
   },
   card_pm: {
     PaymentIntent: getCustomExchange({
       Request: {
-        currency: "USD",
+        amount_details: {
+          order_amount: 1001,
+          currency: "USD",
+        },
+        billing: billingAddress,
+        shipping: shippingAddress,
       },
       Response: {
         status: 200,
@@ -573,6 +536,7 @@ export const connectorDetails = {
         },
       },
     }),
+
     PaymentIntentOffSession: getCustomExchange({
       Request: {
         currency: "USD",
@@ -608,24 +572,35 @@ export const connectorDetails = {
     }),
     No3DSManualCapture: getCustomExchange({
       Request: {
-        payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
+        payment_method_type: "card",
+        payment_method_subtype: "credit",
         customer_acceptance: null,
-        setup_future_usage: "on_session",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_capture",
+        },
       },
     }),
     No3DSAutoCapture: getCustomExchange({
       Request: {
-        payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
+        payment_method_type: "card",
+        payment_method_subtype: "credit",
         customer_acceptance: null,
-        setup_future_usage: "on_session",
+        shipping: shippingAddress,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "succeeded",
+        },
       },
     }),
     Capture: getCustomExchange({
@@ -634,9 +609,11 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
         customer_acceptance: null,
       },
+    }),
+    Overcapture: getCustomExchange({
+      Request: {},
     }),
     PartialCapture: getCustomExchange({
       Request: {},
@@ -656,8 +633,28 @@ export const connectorDetails = {
           error: {
             type: "invalid_request",
             message:
-              "You cannot cancel this payment because it has status succeeded",
-            code: "IR_16",
+              "This Payment could not be PaymentsCancel because it has a status of requires_payment_method. The expected state is requires_capture, partially_captured_and_capturable, partially_authorized_and_requires_capture",
+            code: "IR_14",
+          },
+        },
+      },
+    }),
+    VoidAfterConfirm: getCustomExchange({
+      Request: {},
+      Response: {
+        status: 200,
+        body: {
+          status: "cancelled",
+        },
+      },
+      ResponseCustom: {
+        status: 400,
+        body: {
+          error: {
+            type: "invalid_request",
+            message:
+              "This Payment could not be PaymentsCancel because it has a status of succeeded. The expected state is requires_capture, partially_captured_and_capturable, partially_authorized_and_requires_capture",
+            code: "IR_14",
           },
         },
       },
@@ -668,7 +665,6 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
-        currency: "USD",
         customer_acceptance: null,
       },
       ResponseCustom: {
@@ -967,7 +963,7 @@ export const connectorDetails = {
           error: {
             error_type: "invalid_request",
             message: "Json deserialize error: invalid card number length",
-            code: "IR_06"
+            code: "IR_06",
           },
         },
       },
@@ -1074,8 +1070,9 @@ export const connectorDetails = {
         body: {
           error: {
             error_type: "invalid_request",
-            message: "Json deserialize error: unknown variant `United`, expected one of `AED`, `AFN`, `ALL`, `AMD`, `ANG`, `AOA`, `ARS`, `AUD`, `AWG`, `AZN`, `BAM`, `BBD`, `BDT`, `BGN`, `BHD`, `BIF`, `BMD`, `BND`, `BOB`, `BRL`, `BSD`, `BTN`, `BWP`, `BYN`, `BZD`, `CAD`, `CDF`, `CHF`, `CLP`, `CNY`, `COP`, `CRC`, `CUP`, `CVE`, `CZK`, `DJF`, `DKK`, `DOP`, `DZD`, `EGP`, `ERN`, `ETB`, `EUR`, `FJD`, `FKP`, `GBP`, `GEL`, `GHS`, `GIP`, `GMD`, `GNF`, `GTQ`, `GYD`, `HKD`, `HNL`, `HRK`, `HTG`, `HUF`, `IDR`, `ILS`, `INR`, `IQD`, `IRR`, `ISK`, `JMD`, `JOD`, `JPY`, `KES`, `KGS`, `KHR`, `KMF`, `KPW`, `KRW`, `KWD`, `KYD`, `KZT`, `LAK`, `LBP`, `LKR`, `LRD`, `LSL`, `LYD`, `MAD`, `MDL`, `MGA`, `MKD`, `MMK`, `MNT`, `MOP`, `MRU`, `MUR`, `MVR`, `MWK`, `MXN`, `MYR`, `MZN`, `NAD`, `NGN`, `NIO`, `NOK`, `NPR`, `NZD`, `OMR`, `PAB`, `PEN`, `PGK`, `PHP`, `PKR`, `PLN`, `PYG`, `QAR`, `RON`, `RSD`, `RUB`, `RWF`, `SAR`, `SBD`, `SCR`, `SDG`, `SEK`, `SGD`, `SHP`, `SLE`, `SLL`, `SOS`, `SRD`, `SSP`, `STN`, `SVC`, `SYP`, `SZL`, `THB`, `TJS`, `TMT`, `TND`, `TOP`, `TRY`, `TTD`, `TWD`, `TZS`, `UAH`, `UGX`, `USD`, `UYU`, `UZS`, `VES`, `VND`, `VUV`, `WST`, `XAF`, `XCD`, `XOF`, `XPF`, `YER`, `ZAR`, `ZMW`, `ZWL`",
-            code: "IR_06"
+            message:
+              "Json deserialize error: unknown variant `United`, expected one of `AED`, `AFN`, `ALL`, `AMD`, `ANG`, `AOA`, `ARS`, `AUD`, `AWG`, `AZN`, `BAM`, `BBD`, `BDT`, `BGN`, `BHD`, `BIF`, `BMD`, `BND`, `BOB`, `BRL`, `BSD`, `BTN`, `BWP`, `BYN`, `BZD`, `CAD`, `CDF`, `CHF`, `CLP`, `CNY`, `COP`, `CRC`, `CUP`, `CVE`, `CZK`, `DJF`, `DKK`, `DOP`, `DZD`, `EGP`, `ERN`, `ETB`, `EUR`, `FJD`, `FKP`, `GBP`, `GEL`, `GHS`, `GIP`, `GMD`, `GNF`, `GTQ`, `GYD`, `HKD`, `HNL`, `HRK`, `HTG`, `HUF`, `IDR`, `ILS`, `INR`, `IQD`, `IRR`, `ISK`, `JMD`, `JOD`, `JPY`, `KES`, `KGS`, `KHR`, `KMF`, `KPW`, `KRW`, `KWD`, `KYD`, `KZT`, `LAK`, `LBP`, `LKR`, `LRD`, `LSL`, `LYD`, `MAD`, `MDL`, `MGA`, `MKD`, `MMK`, `MNT`, `MOP`, `MRU`, `MUR`, `MVR`, `MWK`, `MXN`, `MYR`, `MZN`, `NAD`, `NGN`, `NIO`, `NOK`, `NPR`, `NZD`, `OMR`, `PAB`, `PEN`, `PGK`, `PHP`, `PKR`, `PLN`, `PYG`, `QAR`, `RON`, `RSD`, `RUB`, `RWF`, `SAR`, `SBD`, `SCR`, `SDG`, `SEK`, `SGD`, `SHP`, `SLE`, `SLL`, `SOS`, `SRD`, `SSP`, `STN`, `SVC`, `SYP`, `SZL`, `THB`, `TJS`, `TMT`, `TND`, `TOP`, `TRY`, `TTD`, `TWD`, `TZS`, `UAH`, `UGX`, `USD`, `UYU`, `UZS`, `VES`, `VND`, `VUV`, `WST`, `XAF`, `XCD`, `XOF`, `XPF`, `YER`, `ZAR`, `ZMW`, `ZWL`",
+            code: "IR_06",
           },
         },
       },
@@ -1102,8 +1099,9 @@ export const connectorDetails = {
         body: {
           error: {
             error_type: "invalid_request",
-            message: "Json deserialize error: unknown variant `auto`, expected one of `automatic`, `manual`, `manual_multiple`, `scheduled`",
-            code: "IR_06"
+            message:
+              "Json deserialize error: unknown variant `auto`, expected one of `automatic`, `manual`, `manual_multiple`, `scheduled`",
+            code: "IR_06",
           },
         },
       },
@@ -1129,8 +1127,9 @@ export const connectorDetails = {
         body: {
           error: {
             error_type: "invalid_request",
-            message: "Json deserialize error: unknown variant `this_supposed_to_be_a_card`, expected one of `card`, `card_redirect`, `pay_later`, `wallet`, `bank_redirect`, `bank_transfer`, `crypto`, `bank_debit`, `reward`, `real_time_payment`, `upi`, `voucher`, `gift_card`, `open_banking`, `mobile_payment`",
-            code: "IR_06"
+            message:
+              "Json deserialize error: unknown variant `this_supposed_to_be_a_card`, expected one of `card`, `card_redirect`, `pay_later`, `wallet`, `bank_redirect`, `bank_transfer`, `crypto`, `bank_debit`, `reward`, `real_time_payment`, `upi`, `voucher`, `gift_card`, `open_banking`, `mobile_payment`",
+            code: "IR_06",
           },
         },
       },
@@ -1199,7 +1198,8 @@ export const connectorDetails = {
         body: {
           error: {
             type: "invalid_request",
-            message: "A payment token or payment method data or ctp service details is required",
+            message:
+              "A payment token or payment method data or ctp service details is required",
             code: "IR_06",
           },
         },

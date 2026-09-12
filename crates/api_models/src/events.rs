@@ -4,36 +4,40 @@ pub mod customer;
 pub mod dispute;
 pub mod external_service_auth;
 pub mod gsm;
-mod locker_migration;
+pub mod offer_engine;
 pub mod payment;
 #[cfg(feature = "payouts")]
 pub mod payouts;
-#[cfg(feature = "recon")]
-pub mod recon;
 pub mod refund;
+#[cfg(feature = "v2")]
+pub mod revenue_recovery;
 pub mod routing;
 pub mod user;
 pub mod user_role;
-
 use common_utils::{
     events::{ApiEventMetric, ApiEventsType},
     impl_api_event_type,
 };
 
 use crate::customers::CustomerListRequest;
+#[cfg(feature = "tokenization_v2")]
+use crate::tokenization;
 #[allow(unused_imports)]
 use crate::{
     admin::*,
     analytics::{
         api_event::*, auth_events::*, connector_events::ConnectorEventsRequest,
-        outgoing_webhook_event::OutgoingWebhookLogsRequest, sdk_events::*, search::*, *,
+        outgoing_webhook_event::OutgoingWebhookLogsRequest, routing_events::RoutingEventsRequest,
+        sdk_events::*, search::*, *,
     },
     api_keys::*,
     cards_info::*,
     disputes::*,
     files::*,
     mandates::*,
+    merchant_connector_webhook_management::*,
     organization::{
+        ConvertOrganizationToPlatformRequest, ConvertOrganizationToPlatformResponse,
         OrganizationCreateRequest, OrganizationId, OrganizationResponse, OrganizationUpdateRequest,
     },
     payment_methods::*,
@@ -69,6 +73,10 @@ impl_api_event_type!(
         RetrievePaymentLinkResponse,
         MandateListConstraints,
         CreateFileResponse,
+        ConvertOrganizationToPlatformRequest,
+        ConvertOrganizationToPlatformResponse,
+        ConnectorWebhookRegisterRequest,
+        ConnectorWebhookListResponse,
         MerchantConnectorResponse,
         MerchantConnectorId,
         MandateResponse,
@@ -78,6 +86,7 @@ impl_api_event_type!(
         MandateId,
         DisputeListGetConstraints,
         RetrieveApiKeyResponse,
+        RegisterConnectorWebhookResponse,
         ProfileResponse,
         ProfileUpdate,
         ProfileCreate,
@@ -139,7 +148,8 @@ impl_api_event_type!(
         OrganizationCreateRequest,
         OrganizationUpdateRequest,
         OrganizationId,
-        CustomerListRequest
+        CustomerListRequest,
+        RoutingEventsRequest
     )
 );
 
@@ -189,7 +199,7 @@ impl<T> ApiEventMetric for AuthEventMetricsResponse<T> {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl ApiEventMetric for PaymentMethodIntentConfirmInternal {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::PaymentMethod {
@@ -200,7 +210,7 @@ impl ApiEventMetric for PaymentMethodIntentConfirmInternal {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl ApiEventMetric for PaymentMethodIntentCreate {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::PaymentMethodCreate)
@@ -224,6 +234,41 @@ impl ApiEventMetric for PaymentMethodSessionResponse {
     fn get_api_event_type(&self) -> Option<ApiEventsType> {
         Some(ApiEventsType::PaymentMethodSession {
             payment_method_session_id: self.id.clone(),
+        })
+    }
+}
+#[cfg(feature = "tokenization_v2")]
+impl ApiEventMetric for tokenization::GenericTokenizationRequest {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Customer {
+            customer_id: Some(self.customer_id.clone()),
+        })
+    }
+}
+
+#[cfg(feature = "tokenization_v2")]
+impl ApiEventMetric for tokenization::GenericTokenizationResponse {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Token {
+            token_id: Some(self.id.clone()),
+        })
+    }
+}
+
+#[cfg(feature = "tokenization_v2")]
+impl ApiEventMetric for tokenization::DeleteTokenDataResponse {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::Token {
+            token_id: Some(self.id.clone()),
+        })
+    }
+}
+
+#[cfg(feature = "tokenization_v2")]
+impl ApiEventMetric for tokenization::DeleteTokenDataRequest {
+    fn get_api_event_type(&self) -> Option<ApiEventsType> {
+        Some(ApiEventsType::PaymentMethodSession {
+            payment_method_session_id: self.session_id.clone(),
         })
     }
 }

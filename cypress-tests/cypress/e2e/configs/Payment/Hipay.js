@@ -4,16 +4,34 @@ const successfulNo3DSCardDetails = {
   card_number: "4111111111111111",
   card_exp_month: "06",
   card_exp_year: "50",
-  card_holder_name: "joseph Doe",
+  card_holder_name: "Joseph Doe",
   card_cvc: "123",
 };
+
+const billing_info = {
+  address: {
+    line1: "1467",
+    line2: "Harrison Street",
+    line3: "Harrison Street",
+    city: "San Fransico",
+    state: "California",
+    zip: "94122",
+    country: "US",
+    first_name: "Max",
+    last_name: "Mustermann",
+  },
+  email: "mauro.morandi@nexi.it",
+  phone: {
+    number: "9123456789",
+    country_code: "+91",
+  },
+};
+
 const successful3DSCardDetails = {
+  ...successfulNo3DSCardDetails,
   card_number: "4000000000000002",
-  card_exp_month: "06",
-  card_exp_year: "50",
-  card_holder_name: "joseph Doe",
-  card_cvc: "123",
 };
+
 const singleUseMandateData = {
   customer_acceptance: customerAcceptance,
   mandate_type: {
@@ -33,6 +51,55 @@ const multiUseMandateData = {
     },
   },
 };
+
+const paymentMethodDataNo3DSResponse = {
+  card: {
+    authentication_data: null,
+    auth_code: null,
+    card_exp_month: "06",
+    card_exp_year: "50",
+    card_extended_bin: null,
+    card_holder_name: "Joseph Doe",
+    card_isin: "411111",
+    card_issuer: "CONOTOXIA SP Z OO",
+    card_issuing_country: "POLAND",
+    card_network: "Visa",
+    card_type: "DEBIT",
+    card_subtype: "VISA CLASSIC",
+    card_segment_type: "consumer",
+    funding_source: "DEBIT",
+    last4: "1111",
+    payment_checks: null,
+  },
+  billing: {
+    address: null,
+    email: billing_info.email,
+    phone: null,
+  },
+};
+
+const paymentMethodData3DSResponse = {
+  card: {
+    authentication_data: null,
+    auth_code: null,
+    card_exp_month: "06",
+    card_exp_year: "50",
+    card_extended_bin: null,
+    card_holder_name: "Joseph Doe",
+    card_isin: "400000",
+    card_issuer: "Intl Hdqtrs Center Owned",
+    card_issuing_country: "UNITED STATES OF AMERICA",
+    card_network: "Visa",
+    card_type: "CREDIT",
+    card_subtype: "VISA TRADITIONAL",
+    card_segment_type: "consumer",
+    funding_source: "CREDIT",
+    last4: "0002",
+    payment_checks: null,
+  },
+  billing: null,
+};
+
 export const connectorDetails = {
   card_pm: {
     PaymentIntent: {
@@ -40,24 +107,7 @@ export const connectorDetails = {
         currency: "EUR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
-        billing: {
-          address: {
-            line1: "1467",
-            line2: "CA",
-            line3: "CA",
-            city: "Florence",
-            state: "Tuscany",
-            zip: "12345",
-            country: "IT",
-            first_name: "Max",
-            last_name: "Mustermann",
-          },
-          email: "mauro.morandi@nexi.it",
-          phone: {
-            number: "9123456789",
-            country_code: "+91",
-          },
-        },
+        billing: billing_info,
       },
       Response: {
         status: 200,
@@ -72,11 +122,11 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
           billing: {
-            email: "mauro.morandi@nexi.it",
+            email: billing_info.email,
           },
         },
         billing: {
-          email: "mauro.morandi@nexi.it",
+          email: billing_info.email,
         },
         currency: "EUR",
         customer_acceptance: null,
@@ -86,6 +136,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -96,11 +147,11 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
           billing: {
-            email: "mauro.morandi@nexi.it",
+            email: billing_info.email,
           },
         },
         billing: {
-          email: "mauro.morandi@nexi.it",
+          email: billing_info.email,
         },
         currency: "EUR",
         customer_acceptance: null,
@@ -110,6 +161,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -137,24 +189,14 @@ export const connectorDetails = {
       },
     },
     MandateMultiUseNo3DSAutoCapture: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billing_info,
         },
         currency: "EUR",
         mandate_data: multiUseMandateData,
@@ -163,6 +205,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -174,20 +217,7 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            email: "johndoe@gmail.com",
-          },
+          billing: billing_info,
         },
         currency: "EUR",
         mandate_data: multiUseMandateData,
@@ -196,6 +226,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -208,7 +239,7 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
           billing: {
-            email: "mauro.morandi@nexi.it",
+            email: billing_info.email,
           },
         },
         currency: "EUR",
@@ -219,6 +250,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -227,28 +259,12 @@ export const connectorDetails = {
         TRIGGER_SKIP: true,
       },
       Request: {
+        currency: "EUR",
         payment_method: "card",
         payment_method_type: "debit",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            phone: {
-              number: "9123456789",
-              country_code: "+91",
-            },
-            email: "mauro.morandi@nexi.it",
-          },
+          billing: billing_info,
         },
         setup_future_usage: "off_session",
         customer_acceptance: customerAcceptance,
@@ -257,6 +273,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -268,24 +285,7 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            phone: {
-              number: "9123456789",
-              country_code: "+91",
-            },
-            email: "mauro.morandi@nexi.it",
-          },
+          billing: billing_info,
         },
         setup_future_usage: "off_session",
         customer_acceptance: customerAcceptance,
@@ -294,6 +294,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -333,24 +334,7 @@ export const connectorDetails = {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
-          billing: {
-            address: {
-              line1: "1467",
-              line2: "Harrison Street",
-              line3: "Harrison Street",
-              city: "San Fransico",
-              state: "California",
-              zip: "94122",
-              country: "NL",
-              first_name: "joseph",
-              last_name: "Doe",
-            },
-            phone: {
-              number: "9123456789",
-              country_code: "+91",
-            },
-            email: "mauro.morandi@nexi.it",
-          },
+          billing: billing_info,
         },
         currency: "EUR",
         setup_future_usage: "on_session",
@@ -360,6 +344,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -372,7 +357,7 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
           billing: {
-            email: "mauro.morandi@nexi.it",
+            email: billing_info.email,
           },
         },
         currency: "EUR",
@@ -382,6 +367,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -394,7 +380,7 @@ export const connectorDetails = {
         payment_method_data: {
           card: successfulNo3DSCardDetails,
           billing: {
-            email: "mauro.morandi@nexi.it",
+            email: billing_info.email,
           },
         },
         currency: "EUR",
@@ -404,6 +390,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -477,6 +464,9 @@ export const connectorDetails = {
       },
     },
     PaymentMethodIdMandateNo3DSAutoCapture: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         payment_method: "card",
         payment_method_data: {
@@ -484,7 +474,7 @@ export const connectorDetails = {
         },
         currency: "EUR",
         billing: {
-          email: "mauro.morandi@nexi.it",
+          email: billing_info.email,
         },
         mandate_data: null,
         customer_acceptance: customerAcceptance,
@@ -493,17 +483,21 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "succeeded",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
     PaymentMethodIdMandateNo3DSManualCapture: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
       Request: {
         payment_method: "card",
         payment_method_data: {
           card: successfulNo3DSCardDetails,
         },
         billing: {
-          email: "mauro.morandi@nexi.it",
+          email: billing_info.email,
         },
         currency: "EUR",
         mandate_data: null,
@@ -513,6 +507,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_capture",
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -547,6 +542,7 @@ export const connectorDetails = {
           amount_received: 6050,
           amount: 6000,
           net_amount: 6050,
+          payment_method_data: paymentMethodDataNo3DSResponse,
         },
       },
     },
@@ -560,9 +556,7 @@ export const connectorDetails = {
           card: successful3DSCardDetails,
         },
         currency: "EUR",
-        billing: {
-          email: "mauro.morandi@nexi.it",
-        },
+        billing: billing_info,
         customer_acceptance: null,
         setup_future_usage: "on_session",
       },
@@ -570,6 +564,7 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_customer_action",
+          payment_method_data: paymentMethodData3DSResponse,
         },
       },
     },
@@ -582,9 +577,7 @@ export const connectorDetails = {
         payment_method_data: {
           card: successful3DSCardDetails,
         },
-        billing: {
-          email: "mauro.morandi@nexi.it",
-        },
+        billing: billing_info,
         currency: "EUR",
         customer_acceptance: null,
         setup_future_usage: "on_session",
@@ -593,6 +586,118 @@ export const connectorDetails = {
         status: 200,
         body: {
           status: "requires_customer_action",
+          payment_method_data: paymentMethodData3DSResponse,
+        },
+      },
+    },
+    ZeroAuthPaymentIntent: {
+      Request: {
+        amount: 0,
+        setup_future_usage: "off_session",
+        currency: "USD",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+          setup_future_usage: "off_session",
+        },
+      },
+    },
+    ZeroAuthConfirmPayment: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        payment_type: "setup_mandate",
+        payment_method: "card",
+        payment_method_type: "credit",
+        payment_method_data: {
+          card: successfulNo3DSCardDetails,
+        },
+        mandate_data: null,
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "processing",
+          setup_future_usage: "off_session",
+          payment_method_data: paymentMethodDataNo3DSResponse,
+        },
+      },
+    },
+    ZeroAuthMandate: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        currency: "EUR",
+        billing: billing_info,
+      },
+      Response: {
+        status: 200,
+        body: {
+          amount: 0,
+          status: "processing",
+        },
+      },
+    },
+    PaymentIntentOffSession: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        currency: "EUR",
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_payment_method",
+        },
+      },
+    },
+    PaymentMethodIdMandate3DSAutoCapture: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successful3DSCardDetails,
+        },
+        currency: "EUR",
+        mandate_data: null,
+        authentication_type: "three_ds",
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_customer_action",
+          payment_method_data: paymentMethodData3DSResponse,
+        },
+      },
+    },
+    PaymentMethodIdMandate3DSManualCapture: {
+      Configs: {
+        TRIGGER_SKIP: true,
+      },
+      Request: {
+        payment_method: "card",
+        payment_method_data: {
+          card: successful3DSCardDetails,
+        },
+        currency: "EUR",
+        mandate_data: null,
+        authentication_type: "three_ds",
+        customer_acceptance: customerAcceptance,
+      },
+      Response: {
+        status: 200,
+        body: {
+          status: "requires_customer_action",
+          payment_method_data: paymentMethodData3DSResponse,
         },
       },
     },

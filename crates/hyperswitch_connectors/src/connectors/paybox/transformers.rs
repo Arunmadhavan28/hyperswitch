@@ -1,4 +1,3 @@
-use api_models::payments::AdditionalPaymentData;
 use bytes::Bytes;
 use common_enums::enums;
 use common_utils::{
@@ -19,13 +18,13 @@ use hyperswitch_interfaces::{
     consts::{NO_ERROR_CODE, NO_ERROR_MESSAGE},
     errors,
 };
-use masking::{ExposeInterface, PeekInterface, Secret};
+use hyperswitch_masking::{ExposeInterface, PeekInterface, Secret};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     types::{RefundsResponseRouterData, ResponseRouterData},
     utils::{
-        self, AddressDetailsData, CardData as _, PaymentsAuthorizeRequestData,
+        self, AddressDetailsData, CardData as _, CardMandateInfo, PaymentsAuthorizeRequestData,
         PaymentsCompleteAuthorizeRequestData, RouterData as _,
     },
 };
@@ -65,12 +64,6 @@ pub enum PayboxPaymentsRequest {
     Card(PaymentsRequest),
     CardThreeDs(ThreeDSPaymentsRequest),
     Mandate(MandatePaymentRequest),
-}
-
-#[derive(Debug, Serialize)]
-pub struct CardMandateInfo {
-    pub card_exp_month: Secret<String>,
-    pub card_exp_year: Secret<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -457,7 +450,8 @@ impl TryFrom<&PayboxRouterData<&types::PaymentsAuthorizeRouterData>> for PayboxP
                                     .clone()
                                     .ok_or_else(|| {
                                         errors::ConnectorError::MissingRequiredField {
-                                            field_name: "connector_mandate_request_reference_id",
+                                            field_name: "connector_mandate_request_reference_id"
+                                                .into(),
                                         }
                                     })?;
                                 Some(Secret::new(reference_id))
@@ -468,12 +462,7 @@ impl TryFrom<&PayboxRouterData<&types::PaymentsAuthorizeRouterData>> for PayboxP
                 }
             }
             PaymentMethodData::MandatePayment => {
-                let mandate_data = extract_card_mandate_info(
-                    item.router_data
-                        .request
-                        .additional_payment_method_data
-                        .clone(),
-                )?;
+                let mandate_data = item.router_data.request.get_card_mandate_info()?;
                 Ok(Self::Mandate(MandatePaymentRequest::try_from((
                     item,
                     mandate_data,
@@ -481,29 +470,6 @@ impl TryFrom<&PayboxRouterData<&types::PaymentsAuthorizeRouterData>> for PayboxP
             }
             _ => Err(errors::ConnectorError::NotImplemented("Payment methods".to_string()).into()),
         }
-    }
-}
-
-fn extract_card_mandate_info(
-    additional_payment_method_data: Option<AdditionalPaymentData>,
-) -> Result<CardMandateInfo, Error> {
-    match additional_payment_method_data {
-        Some(AdditionalPaymentData::Card(card_data)) => Ok(CardMandateInfo {
-            card_exp_month: card_data.card_exp_month.clone().ok_or_else(|| {
-                errors::ConnectorError::MissingRequiredField {
-                    field_name: "card_exp_month",
-                }
-            })?,
-            card_exp_year: card_data.card_exp_year.clone().ok_or_else(|| {
-                errors::ConnectorError::MissingRequiredField {
-                    field_name: "card_exp_year",
-                }
-            })?,
-        }),
-        _ => Err(errors::ConnectorError::MissingRequiredFields {
-            field_names: vec!["card_exp_month", "card_exp_year"],
-        }
-        .into()),
     }
 }
 
@@ -532,12 +498,7 @@ fn get_transaction_type(
     }
 }
 fn get_paybox_request_number() -> Result<String, Error> {
-    let time_stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .ok_or(errors::ConnectorError::RequestEncodingFailed)?
-        .as_millis()
-        .to_string();
+    let time_stamp = common_utils::date_time::now_unix_timestamp_millis().to_string();
     // unix time (in milliseconds) has 13 digits.if we consider 8 digits(the number digits to make day deterministic) there is no collision in the paybox_request_number as it will reset the paybox_request_number for each day  and paybox accepting maximum length is 10 so we gonna take 9 (13-9)
     let request_number = time_stamp
         .get(4..)
@@ -700,9 +661,12 @@ impl<F, T> TryFrom<ResponseRouterData<F, PayboxCaptureResponse, T, PaymentsRespo
                         connector_request_id: response.transaction_number.clone()
                     })),
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 }),
                 amount_captured: None,
                 ..item.data
@@ -715,8 +679,11 @@ impl<F, T> TryFrom<ResponseRouterData<F, PayboxCaptureResponse, T, PaymentsRespo
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: Some(item.response.transaction_number),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -761,9 +728,12 @@ impl<F> TryFrom<ResponseRouterData<F, PayboxResponse, PaymentsAuthorizeData, Pay
                                 connector_request_id: response.transaction_number.clone()
                             })),
                             network_txn_id: None,
+                            network_txn_link_id: None,
                             connector_response_reference_id: None,
                             incremental_authorization_allowed: None,
+                            authentication_data: None,
                             charges: None,
+                            payment_account_reference: None,
                         }),
                         ..item.data
                     }),
@@ -775,8 +745,11 @@ impl<F> TryFrom<ResponseRouterData<F, PayboxResponse, PaymentsAuthorizeData, Pay
                             status_code: item.http_code,
                             attempt_status: None,
                             connector_transaction_id: Some(response.transaction_number),
-                            issuer_error_code: None,
-                            issuer_error_message: None,
+                            connector_response_reference_id: None,
+                            network_advice_code: None,
+                            network_decline_code: None,
+                            network_error_message: None,
+                            connector_metadata: None,
                         }),
                         ..item.data
                     }),
@@ -792,9 +765,12 @@ impl<F> TryFrom<ResponseRouterData<F, PayboxResponse, PaymentsAuthorizeData, Pay
                     mandate_reference: Box::new(None),
                     connector_metadata: None,
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 }),
                 ..item.data
             }),
@@ -806,8 +782,11 @@ impl<F> TryFrom<ResponseRouterData<F, PayboxResponse, PaymentsAuthorizeData, Pay
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: None,
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -837,9 +816,12 @@ impl<F, T> TryFrom<ResponseRouterData<F, PayboxSyncResponse, T, PaymentsResponse
                         connector_request_id: response.transaction_number.clone()
                     })),
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 }),
                 ..item.data
             }),
@@ -851,8 +833,11 @@ impl<F, T> TryFrom<ResponseRouterData<F, PayboxSyncResponse, T, PaymentsResponse
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: Some(item.response.transaction_number),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -941,8 +926,11 @@ impl TryFrom<RefundsResponseRouterData<RSync, PayboxSyncResponse>>
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: Some(item.response.transaction_number),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -974,8 +962,11 @@ impl TryFrom<RefundsResponseRouterData<Execute, TransactionResponse>>
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: Some(item.response.transaction_number),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -1031,9 +1022,12 @@ impl<F>
                         connector_request_id: response.transaction_number.clone()
                     })),
                     network_txn_id: None,
+                    network_txn_link_id: None,
                     connector_response_reference_id: None,
                     incremental_authorization_allowed: None,
+                    authentication_data: None,
                     charges: None,
+                    payment_account_reference: None,
                 }),
                 ..item.data
             }),
@@ -1045,8 +1039,11 @@ impl<F>
                     status_code: item.http_code,
                     attempt_status: None,
                     connector_transaction_id: Some(response.transaction_number),
-                    issuer_error_code: None,
-                    issuer_error_message: None,
+                    connector_response_reference_id: None,
+                    network_advice_code: None,
+                    network_decline_code: None,
+                    network_error_message: None,
+                    connector_metadata: None,
                 }),
                 ..item.data
             }),
@@ -1067,13 +1064,13 @@ impl TryFrom<&PayboxRouterData<&types::PaymentsCompleteAuthorizeRouterData>> for
     ) -> Result<Self, Self::Error> {
         let redirect_response = item.router_data.request.redirect_response.clone().ok_or(
             errors::ConnectorError::MissingRequiredField {
-                field_name: "redirect_response",
+                field_name: "redirect_response".into(),
             },
         )?;
         let redirect_payload: RedirectionAuthResponse = redirect_response
             .payload
             .ok_or(errors::ConnectorError::MissingConnectorRedirectionPayload {
-                field_name: "request.redirect_response.payload",
+                field_name: "request.redirect_response.payload".into(),
             })?
             .peek()
             .clone()
@@ -1123,7 +1120,7 @@ impl TryFrom<&PayboxRouterData<&types::PaymentsCompleteAuthorizeRouterData>> for
                                 .connector_mandate_request_reference_id
                                 .clone()
                                 .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
-                                    field_name: "connector_mandate_request_reference_id",
+                                    field_name: "connector_mandate_request_reference_id".into(),
                                 })?;
                             Some(Secret::new(reference_id))
                         }

@@ -43,6 +43,10 @@ generate_permissions! {
             scopes: [Read, Write],
             entities: [Profile, Merchant]
         },
+        Subscription: {
+            scopes: [Read, Write],
+            entities: [Profile, Merchant]
+        },
         ThreeDsDecisionManager: {
             scopes: [Read, Write],
             entities: [Merchant, Profile]
@@ -65,67 +69,90 @@ generate_permissions! {
         },
         WebhookEvent: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile, Merchant]
         },
-        ReconToken: {
+        RevenueRecovery: {
             scopes: [Read],
+            entities: [Profile]
+        },
+        CloneConnector: {
+            scopes: [Write],
             entities: [Merchant]
         },
-        ReconFiles: {
+        Theme: {
+            scopes: [Read,Write],
+            entities: [Organization]
+        },
+        ReconIngestion: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile]
         },
-        ReconAndSettlementAnalytics: {
-            scopes: [Read],
-            entities: [Merchant]
-        },
-        ReconUpload: {
+        ReconTransformation: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile]
         },
-        ReconReports: {
+        ReconException: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile]
         },
-        RunRecon: {
+        ReconStagingEntry: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile]
         },
-        ReconConfig: {
+        ReconTransaction: {
             scopes: [Read, Write],
-            entities: [Merchant]
+            entities: [Profile]
+        },
+        ReconRule: {
+            scopes: [Read, Write],
+            entities: [Profile]
+        },
+        SuperpositionConfig: {
+            scopes: [Read, Write],
+            entities: [Profile]
+        },
+        Offers: {
+            scopes: [Read, Write],
+            entities: [Profile]
         },
     ]
 }
 
-pub fn get_resource_name(resource: Resource, entity_type: EntityType) -> &'static str {
+pub fn get_resource_name(resource: Resource, entity_type: EntityType) -> Option<&'static str> {
     match (resource, entity_type) {
-        (Resource::Payment, _) => "Payments",
-        (Resource::Refund, _) => "Refunds",
-        (Resource::Dispute, _) => "Disputes",
-        (Resource::Mandate, _) => "Mandates",
-        (Resource::Customer, _) => "Customers",
-        (Resource::Payout, _) => "Payouts",
-        (Resource::ApiKey, _) => "Api Keys",
-        (Resource::Connector, _) => "Payment Processors, Payout Processors, Fraud & Risk Managers",
-        (Resource::Routing, _) => "Routing",
-        (Resource::ThreeDsDecisionManager, _) => "3DS Decision Manager",
-        (Resource::SurchargeDecisionManager, _) => "Surcharge Decision Manager",
-        (Resource::Analytics, _) => "Analytics",
-        (Resource::Report, _) => "Operation Reports",
-        (Resource::User, _) => "Users",
-        (Resource::WebhookEvent, _) => "Webhook Events",
-        (Resource::ReconUpload, _) => "Reconciliation File Upload",
-        (Resource::RunRecon, _) => "Run Reconciliation Process",
-        (Resource::ReconConfig, _) => "Reconciliation Configurations",
-        (Resource::ReconToken, _) => "Generate & Verify Reconciliation Token",
-        (Resource::ReconFiles, _) => "Reconciliation Process Manager",
-        (Resource::ReconReports, _) => "Reconciliation Reports",
-        (Resource::ReconAndSettlementAnalytics, _) => "Reconciliation Analytics",
-        (Resource::Account, EntityType::Profile) => "Business Profile Account",
-        (Resource::Account, EntityType::Merchant) => "Merchant Account",
-        (Resource::Account, EntityType::Organization) => "Organization Account",
-        (Resource::Account, EntityType::Tenant) => "Tenant Account",
+        (Resource::Payment, _) => Some("Payments"),
+        (Resource::Refund, _) => Some("Refunds"),
+        (Resource::Dispute, _) => Some("Disputes"),
+        (Resource::Mandate, _) => Some("Mandates"),
+        (Resource::Customer, _) => Some("Customers"),
+        (Resource::Payout, _) => Some("Payouts"),
+        (Resource::ApiKey, _) => Some("Api Keys"),
+        (Resource::Connector, _) => {
+            Some("Payment Processors, Payout Processors, 3ds Authenticators, Fraud & Risk Managers, PM Auth Processor,Tax Processors, Billing Processors, Vault Processors")
+        }
+        (Resource::Routing, _) => Some("Routing"),
+        (Resource::Subscription, _) => Some("Subscription"),
+        (Resource::RevenueRecovery, _) => Some("Revenue Recovery"),
+        (Resource::ThreeDsDecisionManager, _) => Some("3DS Decision Manager"),
+        (Resource::SurchargeDecisionManager, _) => Some("Surcharge Decision Manager"),
+        (Resource::Analytics, _) => Some("Insights, Payments, Refunds, Authentication, Routing"),
+        (Resource::Report, _) => Some("Operation Reports"),
+        (Resource::User, _) => Some("Users"),
+        (Resource::WebhookEvent, _) => Some("Webhook Events"),
+        (Resource::Account, EntityType::Profile) => Some("Business Profile Account"),
+        (Resource::Account, EntityType::Merchant) => Some("Merchant Account"),
+        (Resource::Account, EntityType::Organization) => Some("Organization Account"),
+        (Resource::Account, EntityType::Tenant) => Some("Tenant Account"),
+        (Resource::Theme, _) => Some("Themes"),
+        (Resource::CloneConnector, _) => None,
+        (Resource::ReconIngestion, _) => Some("Recon Ingestion Configs"),
+        (Resource::ReconTransformation, _) => Some("Recon Transformation Configs"),
+        (Resource::ReconException, _) => Some("Recon Exception Management"),
+        (Resource::ReconStagingEntry, _) => Some("Recon Staging Entries"),
+        (Resource::ReconTransaction, _) => Some("Recon Transactions"),
+        (Resource::ReconRule, _) => Some("Recon Rules"),
+        (Resource::SuperpositionConfig, _) => Some("Superposition Configs"),
+        (Resource::Offers, _) => Some("Offers"),
     }
 }
 
@@ -134,4 +161,16 @@ pub fn get_scope_name(scope: PermissionScope) -> &'static str {
         PermissionScope::Read => "View",
         PermissionScope::Write => "View and Manage",
     }
+}
+
+pub fn filter_resources_by_entity_type(
+    resources: Vec<Resource>,
+    entity_type: EntityType,
+) -> Option<Vec<Resource>> {
+    let filtered: Vec<Resource> = resources
+        .into_iter()
+        .filter(|res| res.entities().iter().any(|entity| entity <= &entity_type))
+        .collect();
+
+    (!filtered.is_empty()).then_some(filtered)
 }
